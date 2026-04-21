@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.python-version
+
+# Env & secrets
+.env
+.env.local
+.streamlit/secrets.toml
+
+# Data artifacts
+data/seed/*.csv
+*.sqlite3
+logs/*.jsonl
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Railway
+.railway/
