@@ -17,7 +17,7 @@
 - D-3 이후: 문서 구조 변경 금지
 - **D-2 시작 = 이력서 풀데이 무조건 진입 (SURI 80%여도 중단)**
 
-## Stack (v3.1 FINAL — see ADR-001)
+## Stack (v3.2 FINAL — see ADR-001)
 
 - **LLM**: Claude Sonnet 4.6 (SQL Executor) + Haiku 4.5 (Planner/Critic)
 - **Framework**: LangChain 1.x `create_agent` · TypedDict state · InMemorySaver
