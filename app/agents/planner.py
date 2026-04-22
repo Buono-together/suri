@@ -89,11 +89,40 @@ def plan(question: str) -> Plan:
         raw_text = "\n".join(lines).strip()
 
     # JSON 파싱
+    # JSON 파싱 (max_tokens 부족으로 잘렸을 가능성 대비)
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError as e:
-        logger.error("JSON parse failed. Raw: %s", raw_text[:500])
-        raise PlannerError(f"Planner returned invalid JSON: {e}")
+        logger.warning("JSON parse failed (likely truncated). Retrying with explicit 'shorter plan' instruction. Raw tail: ...%s", raw_text[-200:])
+        
+        # 재시도: 더 짧게 응답하도록 명시
+        retry_response = client.messages.create(
+            model=MODEL_NAME,
+            max_tokens=MAX_TOKENS_PLANNER,
+            system=cached_system(PLANNER_SYSTEM),
+            messages=[
+                {"role": "user", "content": question + "\n\n(Keep each field concise - aim for a shorter plan. Maximum 3 items per list.)"},
+            ],
+        )
+        
+        if not retry_response.content:
+            raise PlannerError("Empty response on retry")
+        
+        raw_text = retry_response.content[0].text.strip()
+        if raw_text.startswith("```"):
+            lines = raw_text.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            raw_text = "\n".join(lines).strip()
+        
+        try:
+            parsed = json.loads(raw_text)
+            logger.info("Planner retry succeeded with shorter instruction")
+        except json.JSONDecodeError as e2:
+            logger.error("Planner retry also failed. Raw: %s", raw_text[:500])
+            raise PlannerError(f"Planner returned invalid JSON (after retry): {e2}")
 
     # 필수 필드 검증
     required = ["intent", "tables_needed", "aggregations", "filters",

@@ -35,9 +35,9 @@ load_dotenv(".env")
 MODEL_NAME = "claude-sonnet-4-6"
 
 # 공통 LLM 설정
-MAX_TOKENS_PLANNER = 800
-MAX_TOKENS_EXECUTOR = 1500
-MAX_TOKENS_CRITIC = 600
+MAX_TOKENS_PLANNER = 1500   # v3 복잡 질문 대응 (800은 부족)
+MAX_TOKENS_EXECUTOR = 2000  # tool_use block + SQL 여유
+MAX_TOKENS_CRITIC = 800     # 도메인 해석 포함 시 여유
 
 # 자가교정 재시도 한계 (ADR-003)
 MAX_GUARD_RETRIES = 2
