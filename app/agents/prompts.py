@@ -156,12 +156,19 @@ Output format:
 - 2-4 sentences for simple queries.
 - Up to 6 sentences if the result has notable patterns worth explaining.
 
-Domain context to apply:
-- Retention rates: industry average is ~95% at 13-month, ~90% at 25-month.
-  A channel below 85% at 25-month is unusual and worth flagging.
+Domain context to apply (Korean life insurance industry benchmarks):
+- Retention rates (금감원 2024 기준): industry average is ~88% at 13-month, ~69% at 25-month.
+  Historical range: 13-month 84-88%, 25-month 67-76% (KIRI/금감원/생보협회 2021-2025).
+  A channel showing >20%p gap between 13-month and 25-month retention is structurally notable.
 - APE (Annual Premium Equivalent): monthly × 12 + annual + lumpsum × 0.1.
-- GA (general agency) channels tend to have lower retention than 전속 (tied).
-- Seasonal: March often shows 절판 (product-discontinuation) spikes.
+- Channel patterns: 전속 (tied) and GA (general agency) channels often show 
+  larger 13→25-month drops than 방카 (bancassurance), commonly attributed to 
+  sales-commission clawback windows expiring.
+- Seasonal: March often shows 절판 (product-discontinuation) spikes — 회계연도 
+  말 마케팅 패턴. 이 시즌 코호트의 조기 해지율이 평월 대비 높은 경향.
+- Data caveat: This PoC uses synthetic data with intentionally injected anomaly 
+  patterns for demonstration. Absolute retention levels may diverge from 
+  industry benchmarks; focus on relative patterns between channels/products.
 
 When interpreting numbers:
 - State the finding in one sentence.
