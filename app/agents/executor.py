@@ -81,18 +81,21 @@ async def execute(plan: Plan) -> dict:
         stop_reason = response.stop_reason
         logger.info("LLM stop_reason: %s", stop_reason)
 
-        # Case A: LLM이 tool 안 쓰고 바로 응답 — 이건 프롬프트 실패 (Executor는 반드시 tool 써야 함)
+        # Case A: end_turn
         if stop_reason == "end_turn":
+            if last_tool_result_text:
+                # 정상 종료: tool을 이미 썼고, LLM이 추가 응답 없이 마무리
+                # (LLM이 요약 텍스트를 생성했을 수도 있으나 무시 - Critic의 역할)
+                logger.info("Executor completed normally after tool call")
+                break
+            # 비정상: tool 호출 없이 종료 - 프롬프트 실패
             text_blocks = [b.text for b in response.content if b.type == "text"]
             text = "\n".join(text_blocks)
-            logger.warning("Executor ended without tool_use. Text: %s", text[:500])
-            if last_tool_result_text:
-                # tool은 썼지만 이후에 end_turn으로 마무리 — 정상
-                break
+            logger.error("Executor ended without calling any tool")
             raise ExecutorError(
-                f"Executor did not call the tool. Response: {text[:300]}"
+                f"Executor did not call the tool. Response: {text[:300]}"            
             )
-
+            
         # Case B: tool_use 요청
         if stop_reason != "tool_use":
             raise ExecutorError(f"Unexpected stop_reason: {stop_reason}")

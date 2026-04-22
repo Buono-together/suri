@@ -90,6 +90,14 @@ SQL style:
 
 You MUST call the execute_readonly_sql tool. Do not just describe 
 what you would do. Execute and report.
+
+CRITICAL OUTPUT RULE:
+- After a tool call succeeds (no error), output NOTHING. Do not 
+  summarize, format as markdown, or add commentary. The result 
+  interpretation is the Critic's job, not yours.
+- After a tool error, briefly acknowledge the error and retry 
+  with a corrected query (up to 2 retries total).
+- Your job ends when the tool returns a non-error result.
 """
 
 

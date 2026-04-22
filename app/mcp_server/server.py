@@ -113,6 +113,116 @@ def execute_readonly_sql(query: str) -> str:
             indent=2,
         )
 
+# =============================================================
+# Tool: list_tables
+# =============================================================
+
+@mcp.tool()
+def list_tables() -> str:
+    """
+    List all accessible tables and views in the SURI database.
+
+    Returns a JSON array of objects with fields:
+      - name: table or view name
+      - type: 'BASE TABLE' | 'VIEW'
+      - row_estimate: approximate row count (NULL for views)
+
+    Only tables/views accessible by suri_readonly are returned.
+    Due to the GRANT-based permission model (ADR: 3-layer defense),
+    'customers' is intentionally absent from this list — use
+    'customers_safe' view for PII-masked access.
+    """
+    import json
+
+    logger.info("list_tables called")
+
+    query = """
+        SELECT 
+            t.table_name AS name,
+            t.table_type AS type,
+            c.reltuples::BIGINT AS row_estimate
+        FROM information_schema.tables t
+        LEFT JOIN pg_class c ON c.relname = t.table_name
+        WHERE t.table_schema = 'public'
+        ORDER BY t.table_name
+    """
+
+    try:
+        result = execute_readonly_json(query)
+        logger.info("list_tables succeeded")
+        return result
+    except DBExecutionError as e:
+        logger.error("list_tables failed: %s", e)
+        return json.dumps(
+            {"error": str(e), "type": "DBExecutionError"},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
+# =============================================================
+# Tool: describe_table
+# =============================================================
+
+# 허용 테이블 이름 패턴 (SQL injection 방어)
+import re
+_VALID_TABLE_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+@mcp.tool()
+def describe_table(table_name: str) -> str:
+    """
+    Describe columns of a specific table or view.
+
+    Args:
+        table_name: Name of the table or view (e.g., 'policies', 'customers_safe').
+                    Must be alphanumeric + underscore only.
+
+    Returns JSON with fields:
+      - columns: list of {name, data_type, is_nullable, column_default}
+
+    If the table is not accessible (permission denied) or does not exist,
+    returns an error object.
+    """
+    import json
+
+    logger.info("describe_table called with: %s", table_name)
+
+    # 이름 검증 (SQL injection 차단)
+    if not _VALID_TABLE_NAME.match(table_name):
+        logger.warning("describe_table rejected invalid name: %s", table_name)
+        return json.dumps(
+            {"error": f"Invalid table name format: {table_name!r}",
+             "type": "GuardViolation"},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    # Parameterized query가 아닌 이유: psycopg의 식별자는 파라미터로 못 넣음
+    # 대신 정규식 화이트리스트 + information_schema가 접근 제어를 이중으로 담당
+    query = f"""
+        SELECT 
+            column_name AS name,
+            data_type,
+            is_nullable,
+            column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = '{table_name}'
+        ORDER BY ordinal_position
+    """
+
+    try:
+        result = execute_readonly_json(query)
+        logger.info("describe_table succeeded for %s", table_name)
+        return result
+    except DBExecutionError as e:
+        logger.error("describe_table failed: %s", e)
+        return json.dumps(
+            {"error": str(e), "type": "DBExecutionError"},
+            ensure_ascii=False,
+            indent=2,
+        )
 
 # =============================================================
 # Entrypoint
