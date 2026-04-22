@@ -14,7 +14,7 @@ CREATE TABLE products (
   product_name    VARCHAR(100) NOT NULL,
   product_type    VARCHAR(20)  NOT NULL CHECK (product_type IN ('보장성', '저축성', '변액')),
   product_group   VARCHAR(20)  NOT NULL CHECK (product_group IN ('건강', '종신', '연금', '저축', '정기')),
-  base_premium    INTEGER,
+  base_premium    BIGINT,
   launch_date     DATE,
   created_at      TIMESTAMPTZ  DEFAULT NOW()
 );
@@ -54,9 +54,9 @@ CREATE TABLE policies (
   issue_date         DATE         NOT NULL,
   maturity_date      DATE,
   status             VARCHAR(20)  NOT NULL CHECK (status IN ('active', 'lapsed', 'terminated', 'matured')),
-  monthly_premium    INTEGER,
-  annual_premium     INTEGER,                         -- APE 계산 원본
-  sum_insured        INTEGER,
+  monthly_premium    BIGINT,
+  annual_premium     BIGINT,                         -- APE 계산 원본
+  sum_insured        BIGINT,
   payment_frequency  VARCHAR(10)  CHECK (payment_frequency IN ('monthly', 'annual', 'single')),
   -- IFRS 17 확장 포인트 (Future Work)
   cohort_year        INTEGER,                         -- 자동 채움 (시드 생성 시 issue_date에서 추출)
@@ -71,7 +71,7 @@ CREATE TABLE premium_payments (
   payment_id    INTEGER      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   policy_id     INTEGER      NOT NULL REFERENCES policies(policy_id),
   payment_date  DATE         NOT NULL,
-  amount        INTEGER      NOT NULL,
+  amount        BIGINT      NOT NULL,
   status        VARCHAR(20)  DEFAULT 'paid' CHECK (status IN ('paid', 'overdue', 'missed'))
 );
 
@@ -82,7 +82,7 @@ CREATE TABLE claims (
   claim_date    DATE         NOT NULL,
   paid_date     DATE,
   claim_type    VARCHAR(50),                           -- 사망/질병/사고/만기 등
-  amount        INTEGER,
+  amount        BIGINT,
   status        VARCHAR(20)  CHECK (status IN ('pending', 'approved', 'rejected', 'paid'))
 );
 
