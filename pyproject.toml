@@ -8,6 +8,8 @@ dependencies = [
   "python-dotenv>=1.0",
   "faker>=40.15.0",
   "psycopg[binary]>=3.3.3",
+  "mcp[cli]>=1.27.0",
+  "sqlglot>=30.6.0",
 ]
 
 [tool.uv]
