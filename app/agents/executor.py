@@ -19,6 +19,7 @@ from .base import (
     MODEL_NAME,
     MAX_TOKENS_EXECUTOR,
     MAX_GUARD_RETRIES,
+    cached_system,
 )
 from .prompts import EXECUTOR_SYSTEM
 from .planner import Plan
@@ -73,7 +74,7 @@ async def execute(plan: Plan) -> dict:
         response = client.messages.create(
             model=MODEL_NAME,
             max_tokens=MAX_TOKENS_EXECUTOR,
-            system=EXECUTOR_SYSTEM,
+            system=cached_system(EXECUTOR_SYSTEM),
             tools=tools,
             messages=messages,
         )

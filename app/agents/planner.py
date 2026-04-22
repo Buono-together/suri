@@ -10,7 +10,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-from .base import get_anthropic_client, MODEL_NAME, MAX_TOKENS_PLANNER
+from .base import get_anthropic_client, MODEL_NAME, MAX_TOKENS_PLANNER, cached_system
 from .prompts import PLANNER_SYSTEM
 
 
@@ -65,7 +65,7 @@ def plan(question: str) -> Plan:
     response = client.messages.create(
         model=MODEL_NAME,
         max_tokens=MAX_TOKENS_PLANNER,
-        system=PLANNER_SYSTEM,
+        system=cached_system(PLANNER_SYSTEM),
         messages=[
             {"role": "user", "content": question},
         ],

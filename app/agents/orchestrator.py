@@ -99,8 +99,24 @@ async def run_async(question: str) -> PipelineResult:
     )
 
 
-def run(question: str) -> PipelineResult:
+def run(question: str, use_cache: bool = True) -> PipelineResult:
     """
     Sync wrapper for Streamlit / CLI use.
+    
+    Args:
+        question: User question (Korean NL).
+        use_cache: If True, check filesystem cache first (dev convenience).
+                   Set False to force fresh API call.
     """
+    if use_cache:
+        from .cache import load_cached, save_cached
+        cached = load_cached(question)
+        if cached is not None:
+            return cached
+        
+        result = asyncio.run(run_async(question))
+        if not result.error:  # 에러 응답은 캐시 안 함 (다음 시도 허용)
+            save_cached(result)
+        return result
+    
     return asyncio.run(run_async(question))

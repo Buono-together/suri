@@ -35,9 +35,9 @@ load_dotenv(".env")
 MODEL_NAME = "claude-sonnet-4-6"
 
 # 공통 LLM 설정
-MAX_TOKENS_PLANNER = 1024
-MAX_TOKENS_EXECUTOR = 2048
-MAX_TOKENS_CRITIC = 1024
+MAX_TOKENS_PLANNER = 800
+MAX_TOKENS_EXECUTOR = 1500
+MAX_TOKENS_CRITIC = 600
 
 # 자가교정 재시도 한계 (ADR-003)
 MAX_GUARD_RETRIES = 2
@@ -107,3 +107,26 @@ async def call_mcp_tool(tool_name: str, tool_input: dict) -> str:
                 return "{}"
             first = result.content[0]
             return getattr(first, "text", str(first))
+
+# =============================================================
+# Prompt caching helper
+# =============================================================
+
+def cached_system(system_text: str) -> list[dict]:
+    """
+    Wrap system prompt with ephemeral cache_control.
+    
+    Anthropic prompt caching: 5-min TTL.
+    - Cache write: 1.25x normal input cost
+    - Cache read: 0.1x normal input cost (90% discount)
+    
+    For our use case (3 agents sharing similar system prompts,
+    many repeated calls during testing), this saves ~70-90% on input cost.
+    """
+    return [
+        {
+            "type": "text",
+            "text": system_text,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
