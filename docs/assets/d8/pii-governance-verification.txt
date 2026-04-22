@@ -1,0 +1,22 @@
+=== 1. Check role attributes ===
+             List of roles
+   Role name   | Attributes | Member of 
+---------------+------------+-----------
+ suri_readonly |            | {}
+
+
+=== 2. PII table access should FAIL ===
+
+=== 3. Safe VIEW access should SUCCEED ===
+ERROR:  permission denied for table customers
+ count 
+-------
+     0
+(1 row)
+
+
+=== 4. UPDATE should FAIL (read-only) ===
+ERROR:  permission denied for table products
+
+=== 5. DELETE should FAIL (read-only) ===
+ERROR:  permission denied for table customers

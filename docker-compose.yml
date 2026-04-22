@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: suri-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: suri
+      POSTGRES_USER: suri_admin
+      POSTGRES_PASSWORD: changeme
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - suri_pg_data:/var/lib/postgresql/data
+      - ./data/schema:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suri_admin -d suri"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  suri_pg_data:
+    name: suri_pg_data

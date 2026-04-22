@@ -6,6 +6,8 @@ requires-python = ">=3.12"
 dependencies = [
   "streamlit>=1.40",
   "python-dotenv>=1.0",
+  "faker>=40.15.0",
+  "psycopg>=3.3.3",
 ]
 
 [tool.uv]
