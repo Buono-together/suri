@@ -6,6 +6,9 @@ Architecture (Layer 1 of 3-layer defense):
 
 Tools exposed:
 - execute_readonly_sql(query): Validated SELECT execution
+- list_tables: Schema discovery
+- describe_table(name): Column inspection
+- get_domain_term(term): Deterministic Korean insurance glossary lookup
 
 Design notes:
 - Uses mcp.server.fastmcp.FastMCP (official SDK's FastMCP 1.0)
@@ -17,7 +20,10 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
+from typing import Any
 
+import yaml
 from mcp.server.fastmcp import FastMCP
 
 from .guards import check_query, GuardViolation
@@ -223,6 +229,92 @@ def describe_table(table_name: str) -> str:
             ensure_ascii=False,
             indent=2,
         )
+
+# =============================================================
+# Tool: get_domain_term
+# =============================================================
+#
+# Deterministic domain glossary retrieval. Replaces RAG/vector-DB with
+# a single-file YAML lookup (4-AI cross-review consensus, 2026-04-23).
+# Rationale: domain terms in Korean life insurance are closed-vocabulary
+# and benefit more from author-curated definitions than from semantic
+# similarity search. See ADR-004.
+
+_GLOSSARY_PATH = Path(__file__).parent / "domain_glossary.yaml"
+_glossary_cache: dict[str, Any] | None = None
+
+
+def _load_glossary() -> dict[str, Any]:
+    """Lazy-load the glossary YAML into a dict on first access."""
+    global _glossary_cache
+    if _glossary_cache is None:
+        with _GLOSSARY_PATH.open(encoding="utf-8") as f:
+            _glossary_cache = yaml.safe_load(f)
+        logger.info(
+            "Glossary loaded: %d top-level keys", len(_glossary_cache)
+        )
+    return _glossary_cache
+
+
+@mcp.tool()
+def get_domain_term(term: str) -> str:
+    """
+    Retrieve the standard definition, formula, and SQL hint for a Korean
+    life-insurance domain term.
+
+    Use this BEFORE generating SQL whenever the user's question mentions
+    a domain term like 유지율, APE, CSM, 손해율, 지급률, 코호트, 해지율,
+    판매채널, 측정모형 등. The retrieved entry contains:
+      - standard_definition / definition: authoritative definition
+      - calculation_basis / formula / proxy_formula: computation rules
+      - suri_schema_hint: which tables/columns to use in SURI DB
+      - suri_산출_가능_여부: whether this metric can be computed from PoC data
+      - 불가_사유 (if applicable): data limitations
+      - critical_note / common_mistake: pitfalls to avoid
+      - industry_benchmark: expected value range for sanity check
+      - sources: primary/secondary citations
+
+    This tool is deterministic (single-file YAML lookup, no semantic search).
+
+    Args:
+        term: Exact term key. Available keys include:
+              유지율, 조기_해지율, 해지_및_실효, 해약환급금, 승환계약,
+              APE, 월초보험료, 수입보험료, 코호트,
+              CSM, BEL, RA, IFRS17_측정모형, 지급률_proxy,
+              판매채널, 상품유형, 절판, 불완전판매
+
+    Returns:
+        JSON string of the full term entry (dict) on hit.
+        On miss: {"error": "...", "suggested_terms": [all registered keys]}
+    """
+    import json
+
+    logger.info("get_domain_term called: %s", term)
+
+    glossary = _load_glossary()
+
+    # meta 블록은 사전 조회 대상에서 제외
+    registered_terms = [k for k in glossary.keys() if k != "meta"]
+
+    if term in glossary and term != "meta":
+        entry = glossary[term]
+        return json.dumps(
+            {"term": term, "entry": entry},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    logger.info("Term not registered: %s", term)
+    return json.dumps(
+        {
+            "error": f"미등록 용어: {term!r}",
+            "type": "TermNotFound",
+            "suggested_terms": registered_terms,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
 
 # =============================================================
 # Entrypoint
