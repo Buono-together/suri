@@ -212,3 +212,82 @@
 - 처음부터 상대 임포트 사용
 - `dateutil.relativedelta`로 날짜 산술 (Feb 29 문제 자동 처리)
 
+---
+
+## 8. 실측 케이스 — Resilience 증거
+
+골든셋 v3.1에서 C4/Scene 2를 "자가교정"에서 "거버넌스 내재화"로 재분류한 후
+(`docs/golden-set.md` v3 → v3.1 변경 이력 참조), 진짜 `is_error=True` 피드백 
+루프의 증거는 실측 케이스로 확보한다. 아래는 D-6 회귀 측정 중 실제 수집된 
+사례.
+
+### 8.1. DB 타입 에러 자가교정 (C3 첫 시도, 2026-04-23 11:11)
+
+**관찰 맥락**: 골든셋 C3 — "상품 유형별 월별 APE와 보험금 청구 발생 비율을 
+같이 봤을 때 손해율 관점에서 문제 있는 구간 있어?" 를 Executor가 실행하는 
+중, Sonnet 4.6이 생성한 LARGE CTE 쿼리(11개 CTE)가 PostgreSQL 타입 체계와 
+충돌한 실제 사례.
+
+#### 타임라인 (로그 원문: `.tmp/core8_20260423_1109.log`)
+
+| 시각 | 이벤트 |
+|---|---|
+| 11:11:06 | `list_tables` 호출 |
+| 11:11:13~14 | `describe_table(monthly_ape)`, `describe_table(claims)`, `describe_table(policies)`, `describe_table(products)` 순차 호출 |
+| 11:11:39.947 | `execute_readonly_sql` 호출 — 11개 CTE 체인, 마지막 SELECT에 `ROUND(...)` 사용 |
+| 11:11:39.952 | Guard: `Guard passed (tables: ('active_policies', 'ape_by_type', 'avg_loss', 'claims', 'claims_by_type', 'combined', 'metrics', 'monthly_ape', 'months', 'policies', 'products'))` — 통과 |
+| 11:11:39.970 | DB: `[ERROR] DB execution failed: function round(double precision, integer) does not exist` LINE 101 |
+| 11:11:39.972 | Executor 레이어: `[WARNING suri.executor] Tool error: ... (DBExecutionError)` — `is_error=True` 플래그로 LLM에 반환 |
+| 11:11:59.688 | **20초 후**, Executor가 **재시도** — 같은 CTE 구조 유지(쿼리 시작 `WITH -- ── 1. APE by product_type × year_month ───`), ROUND 부분만 수정 |
+| 11:12:00.356 | `Query executed successfully` — 복구 완료 |
+
+#### 핵심 메커니즘
+
+- **에러 전달 경로**: MCP server (`db.py`) → `{"type": "DBExecutionError", "error": "..."}` JSON 반환 → Executor가 `is_error=True`로 `tool_result` block에 주입 → 다음 Anthropic API 호출의 user content로 LLM에 전달.
+- **LLM의 자체 수정**: 오케스트레이터 개입 없음. Sonnet 4.6이 에러 메시지의 `HINT: You might need to add explicit type casts` 를 읽고 `CAST(... AS numeric)` 혹은 `::numeric` 추가해 재생성. 같은 CTE 11개 구조를 유지하면서 ROUND 호출부만 수정 — "전체 재작성" 아닌 "핀포인트 수정"에 해당.
+- **재시도 limit**: `MAX_GUARD_RETRIES=2` 내 해결. 2회 한도 초과 시 Orchestrator가 에러를 그대로 반환하게 설계됨(executor.py 참조).
+
+#### 이 케이스의 의미
+
+1. **자가교정이 문서 속 주장이 아니라 실측**: 어느 다른 포트폴리오가 "로그 원문으로 증빙 가능한 자가교정 케이스" 를 제출할 수 있나. 이게 차별화.
+2. **`is_error=True` 피드백 루프의 설계가 실증**: ADR-003의 설계 선택(MCP tool이 예외 raise 대신 에러 JSON return + Executor가 `is_error=True`로 LLM에 재주입)이 실제 운영에서 작동함을 보여주는 single-shot 증거.
+3. **Guard와 DB Error의 layered 분업**: 같은 재시도 메커니즘이 `GuardViolation`(Layer 1 차단)과 `DBExecutionError`(Layer 3+ 실행 오류) 둘 다 커버함. 즉 자가교정 한 축이 3층 방어의 모든 층과 정합.
+4. **LLM의 hint 활용**: PostgreSQL이 주는 `HINT: No function matches the given name and argument types. You might need to add explicit type casts.` 메시지를 LLM이 그대로 흡수. 이게 "에러를 숨기지 말고 구조화해서 전달하라"는 ADR-003 설계의 payoff.
+
+#### 시연용 재현 경로
+
+면접 시 라이브 재현이 어려우면 아래 경로로 증빙 가능:
+
+1. `.tmp/core8_20260423_1109.log` 파일 열기 (면접 노트북에 보존)
+2. `11:11:39` ~ `11:12:00` 구간 20초 (grep로 추출 가능)
+3. 3줄짜리 스크린샷:
+   - 에러: `[ERROR] DB execution failed: function round(double precision, integer) does not exist`
+   - 재시도: `[INFO] execute_readonly_sql called: WITH -- ── 1. APE by product_type × year_month ───`
+   - 성공: `[INFO] Query executed successfully`
+
+#### 면접 Q&A 답변 템플릿
+
+**Q**: "자가교정이 실제로 작동하는지 어떻게 증명하나요?"
+
+**A (45초)**: 
+> "D-6 회귀 측정 중 실제 발생한 사례가 있습니다. Sonnet이 손해율 proxy 쿼리를 짜면서 `ROUND(double precision, integer)`를 호출했는데, 이건 PostgreSQL에서 지원 안 되는 시그니처입니다. 우리 MCP 서버가 이 DB 에러를 JSON으로 구조화해서 `is_error=True` 플래그와 함께 LLM에 재전달하자, LLM이 PostgreSQL의 HINT 문구를 읽고 `CAST` 추가해서 20초 뒤 재시도 — 성공했습니다. 로그 원문이 `core8_20260423_1109.log` 11시 11분부터 11시 12분 구간에 남아있어 스크린샷으로도 보여드릴 수 있습니다."
+
+**Q**: "왜 try/except로 막지 않고 LLM한테 돌려주나요?"
+
+**A (30초)**:
+> "세 가지 이유입니다. 첫째, try/except는 에러를 **감추고** 다음 쿼리에 대한 정보를 주지 않습니다. 구조화된 에러는 LLM에게 다음 행동을 결정할 정보를 줍니다. 둘째, 이런 타입 에러는 인간 DBA도 가끔 놓치는 영역입니다 — PostgreSQL만의 ROUND 시그니처 제약. LLM이 HINT 메시지 하나로 해결하는 게 오히려 빠릅니다. 셋째, 면접에서 '실측으로 증명되는 resilience'로 설명할 수 있게 됩니다."
+
+#### 한계
+
+- 2회 재시도 한도 내에서만 복구. 복잡한 semantics 에러(예: JOIN 조건 오류로 결과가 0건)는 재시도로 해결 안 됨 — Critic이 "결과 없음"을 설명하게 됨.
+- Planner-Executor간 state 전달은 JSON Plan 뿐. Executor의 실패 정보가 Planner로 거슬러 올라가진 않음(설계 선택, ADR-003).
+
+### 8.2. TBD — 추가 케이스 수집 시 여기에 정리
+
+향후 candidates:
+- Scene 3 멀티턴 드릴다운 중 Context 누적 관찰
+- GuardViolation 후 `suggested alternative` 힌트로 쿼리 재작성 (C4 v3 버전 관찰 가능)
+- 쿼리 timeout 발생 시 LIMIT 추가 재시도 (미발생)
+
+D-4 이전까지 수집되는 실측 케이스는 이 섹션에 추가. 문서 구조 동결 이후엔 
+내용만 보강 가능.
