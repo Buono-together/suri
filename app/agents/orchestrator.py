@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .planner import plan, Plan, PlannerError
-from .executor import execute, ExecutorError
+from .executor import execute, ExecutorError, ToolCall
 from .critic import critique, CriticError
 
 
@@ -26,6 +26,7 @@ class PipelineResult:
     """Full trace of a pipeline run — useful for debugging & UI display."""
     question: str
     plan: Plan | None
+    tool_calls: list[ToolCall]
     execution_result: dict | None
     answer: str
     error: str | None = None
@@ -34,6 +35,7 @@ class PipelineResult:
         return {
             "question": self.question,
             "plan": self.plan.to_dict() if self.plan else None,
+            "tool_calls": [tc.to_dict() for tc in self.tool_calls],
             "execution_result": self.execution_result,
             "answer": self.answer,
             "error": self.error,
@@ -59,6 +61,7 @@ async def run_async(question: str) -> PipelineResult:
         return PipelineResult(
             question=question,
             plan=None,
+            tool_calls=[],
             execution_result=None,
             answer="질문 이해에 실패했습니다. 좀 더 구체적으로 말씀해 주세요.",
             error=f"PlannerError: {e}",
@@ -66,12 +69,15 @@ async def run_async(question: str) -> PipelineResult:
 
     # Step 2: Executor
     try:
-        exec_result = await execute(plan_obj)
+        exec_result, tool_calls = await execute(plan_obj)
     except ExecutorError as e:
         logger.error("Executor failed: %s", e)
+        # Executor 실패 시에도 지금까지 수집된 tool_calls가 있을 수 있음
+        collected = getattr(e, "tool_calls", [])
         return PipelineResult(
             question=question,
             plan=plan_obj,
+            tool_calls=collected,
             execution_result=None,
             answer="데이터 조회 중 오류가 발생했습니다.",
             error=f"ExecutorError: {e}",
@@ -85,6 +91,7 @@ async def run_async(question: str) -> PipelineResult:
         return PipelineResult(
             question=question,
             plan=plan_obj,
+            tool_calls=tool_calls,
             execution_result=exec_result,
             answer="결과 해석 중 오류가 발생했습니다.",
             error=f"CriticError: {e}",
@@ -94,6 +101,7 @@ async def run_async(question: str) -> PipelineResult:
     return PipelineResult(
         question=question,
         plan=plan_obj,
+        tool_calls=tool_calls,
         execution_result=exec_result,
         answer=answer,
     )

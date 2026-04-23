@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .planner import Plan
+from .executor import ToolCall
 from .orchestrator import PipelineResult
 
 
@@ -48,9 +49,13 @@ def load_cached(question: str) -> PipelineResult | None:
         plan_data = data.get("plan")
         plan_obj = Plan(**plan_data) if plan_data else None
         
+        tool_calls_data = data.get("tool_calls", [])
+        tool_calls = [ToolCall.from_dict(tc) for tc in tool_calls_data]
+        
         result = PipelineResult(
             question=data["question"],
             plan=plan_obj,
+            tool_calls=tool_calls,
             execution_result=data.get("execution_result"),
             answer=data["answer"],
             error=data.get("error"),
@@ -69,6 +74,7 @@ def save_cached(result: PipelineResult) -> None:
         data: dict[str, Any] = {
             "question": result.question,
             "plan": asdict(result.plan) if result.plan else None,
+            "tool_calls": [tc.to_dict() for tc in result.tool_calls],
             "execution_result": result.execution_result,
             "answer": result.answer,
             "error": result.error,

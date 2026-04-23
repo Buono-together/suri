@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from dataclasses import dataclass, field
+from typing import Any
 
 from .base import (
     get_anthropic_client,
@@ -28,24 +31,59 @@ from .planner import Plan
 logger = logging.getLogger("suri.executor")
 
 
+@dataclass
+class ToolCall:
+    """Single MCP tool invocation with its outcome — for UI display."""
+    name: str
+    input: dict
+    output_raw: str
+    is_error: bool
+    error_type: str | None
+    elapsed_ms: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "input": self.input,
+            "output_raw": self.output_raw,
+            "is_error": self.is_error,
+            "error_type": self.error_type,
+            "elapsed_ms": self.elapsed_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ToolCall":
+        return cls(
+            name=d["name"],
+            input=d["input"],
+            output_raw=d["output_raw"],
+            is_error=d["is_error"],
+            error_type=d.get("error_type"),
+            elapsed_ms=d["elapsed_ms"],
+        )
+
+
 class ExecutorError(RuntimeError):
     """Raised when executor fails after retries."""
-    pass
+    def __init__(self, msg: str, tool_calls: list[ToolCall] | None = None):
+        super().__init__(msg)
+        self.tool_calls = tool_calls or []
 
 
-async def execute(plan: Plan) -> dict:
+async def execute(plan: Plan) -> tuple[dict, list[ToolCall]]:
     """
     Execute the plan by generating SQL and calling MCP tool.
 
-    Returns the MCP tool's final result dict, e.g.:
-        {"columns": [...], "rows": [...], "row_count": N, "truncated": False}
-
-    Or if Guard/DB errors persist beyond retries:
-        {"error": "...", "type": "GuardViolation" | "DBExecutionError"}
+    Returns (result_dict, tool_calls):
+      - result_dict: the MCP tool's final result (columns/rows/row_count/truncated)
+                     or error dict ({error, type}) if retries exhausted
+      - tool_calls: full list of MCP tool invocations with timings, for UI.
 
     Raises ExecutorError only on fundamental failures (LLM errors, etc.).
+    The exception carries .tool_calls so partial trace is preserved.
     """
     client = get_anthropic_client()
+    tool_calls_trace: list[ToolCall] = []
 
     # MCP 서버에서 tool 스키마 조회 (매번 하는 이유: PoC 단순성)
     tools = await list_mcp_tools()
@@ -85,21 +123,29 @@ async def execute(plan: Plan) -> dict:
         # Case A: end_turn
         if stop_reason == "end_turn":
             if last_tool_result_text:
-                # 정상 종료: tool을 이미 썼고, LLM이 추가 응답 없이 마무리
-                # (LLM이 요약 텍스트를 생성했을 수도 있으나 무시 - Critic의 역할)
                 logger.info("Executor completed normally after tool call")
                 break
-            # 비정상: tool 호출 없이 종료 - 프롬프트 실패
             text_blocks = [b.text for b in response.content if b.type == "text"]
             text = "\n".join(text_blocks)
             logger.error("Executor ended without calling any tool")
             raise ExecutorError(
-                f"Executor did not call the tool. Response: {text[:300]}"            
+                f"Executor did not call the tool. Response: {text[:300]}",
+                tool_calls=tool_calls_trace,
             )
-            
+
+        # Case A-2: max_tokens — tool 결과가 있으면 정상 종료로 간주
+        if stop_reason == "max_tokens":
+            if last_tool_result_text:
+                logger.warning(
+                    "Executor hit max_tokens after tool call — "
+                    "treating last tool result as final"
+                )
+                break
+            raise ExecutorError("max_tokens hit before any tool call", tool_calls=tool_calls_trace)
+
         # Case B: tool_use 요청
         if stop_reason != "tool_use":
-            raise ExecutorError(f"Unexpected stop_reason: {stop_reason}")
+            raise ExecutorError(f"Unexpected stop_reason: {stop_reason}", tool_calls=tool_calls_trace)
 
         # tool_use block 추출
         assistant_content = response.content
@@ -107,7 +153,7 @@ async def execute(plan: Plan) -> dict:
 
         tool_uses = [b for b in assistant_content if b.type == "tool_use"]
         if not tool_uses:
-            raise ExecutorError("stop_reason=tool_use but no tool_use block")
+            raise ExecutorError("stop_reason=tool_use but no tool_use block", tool_calls=tool_calls_trace)
 
         # 각 tool_use 실행 (일반적으로 1개)
         tool_results = []
@@ -117,7 +163,9 @@ async def execute(plan: Plan) -> dict:
             logger.info("Calling MCP tool '%s' with input: %s",
                         tool_name, json.dumps(tool_input, ensure_ascii=False)[:200])
 
+            t0 = time.monotonic()
             raw_result = await call_mcp_tool(tool_name, tool_input)
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
             last_tool_result_text = raw_result
 
             # Parse to check for errors
@@ -127,10 +175,21 @@ async def execute(plan: Plan) -> dict:
                 parsed = {"error": "Tool returned non-JSON", "type": "ParseError"}
 
             is_error = "error" in parsed and "type" in parsed
+            error_type = parsed.get("type") if is_error else None
             if is_error:
                 logger.warning("Tool error: %s (%s)", parsed.get("error"), parsed.get("type"))
                 if parsed.get("type") == "GuardViolation":
                     guard_retries += 1
+
+            # UI trace 수집
+            tool_calls_trace.append(ToolCall(
+                name=tool_name,
+                input=dict(tool_input) if tool_input else {},
+                output_raw=raw_result,
+                is_error=is_error,
+                error_type=error_type,
+                elapsed_ms=elapsed_ms,
+            ))
 
             tool_results.append({
                 "type": "tool_result",
@@ -142,14 +201,13 @@ async def execute(plan: Plan) -> dict:
         # Guard 재시도 한계 체크
         if guard_retries > MAX_GUARD_RETRIES:
             logger.error("Max guard retries (%d) exceeded", MAX_GUARD_RETRIES)
-            # 마지막 에러를 결과로 반환 (raise 대신)
-            return json.loads(last_tool_result_text)
+            return json.loads(last_tool_result_text), tool_calls_trace
 
         # Tool result를 user message로 추가하고 다음 iteration
         messages.append({"role": "user", "content": tool_results})
 
     # 루프 종료 — 마지막 tool 결과 반환
     if not last_tool_result_text:
-        raise ExecutorError("Loop ended without any tool call")
+        raise ExecutorError("Loop ended without any tool call", tool_calls=tool_calls_trace)
 
-    return json.loads(last_tool_result_text)
+    return json.loads(last_tool_result_text), tool_calls_trace
