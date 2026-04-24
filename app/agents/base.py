@@ -13,6 +13,7 @@ MCP connection pattern:
 from __future__ import annotations
 
 import os
+import sys
 from dotenv import load_dotenv
 
 from anthropic import Anthropic
@@ -42,12 +43,16 @@ MAX_TOKENS_CRITIC = 800     # 도메인 해석 포함 시 여유
 # 자가교정 재시도 한계 (ADR-003)
 MAX_GUARD_RETRIES = 2
 
-# MCP 서버 실행 방식
-# uv run python -m app.mcp_server.server 로 서버 기동
-# stdio_client가 이 명령을 subprocess로 띄우고 파이프 통신
+# MCP 서버 실행 방식 — stdio_client 가 subprocess 로 띄워 파이프 통신.
+# - command: sys.executable 로 현재 프로세스의 Python 바이너리 직접 호출
+#   (로컬 venv · Railway nixpacks 양쪽 모두 동일하게 해결).
+# - env: os.environ 명시 전달. StdioServerParameters 는 env 를 지정하지
+#   않으면 subprocess 에 부모 환경을 상속하지 않을 수 있어 Railway 에서
+#   POSTGRES_HOST 등이 유실돼 localhost fallback 이 발생하는 것을 차단.
 SERVER_PARAMS = StdioServerParameters(
-    command="uv",
-    args=["run", "python", "-m", "app.mcp_server.server"],
+    command=sys.executable,
+    args=["-m", "app.mcp_server.server"],
+    env=dict(os.environ),
 )
 
 
