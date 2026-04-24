@@ -92,8 +92,18 @@ COMMENT ON VIEW monthly_ape IS
 -- MCP 서버가 쓸 읽기 전용 계정
 -- ============================================================
 
--- 기존 ROLE이 있으면 제거 (멱등성 보장)
-DROP ROLE IF EXISTS suri_readonly;
+-- 기존 ROLE이 있으면 권한까지 회수하고 제거 (멱등성).
+-- DROP ROLE IF EXISTS 만으로는 해당 롤의 GRANT 가 존재할 때 실패하므로
+-- DROP OWNED CASCADE 로 grant 를 먼저 회수한다.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'suri_readonly') THEN
+    EXECUTE 'REASSIGN OWNED BY suri_readonly TO CURRENT_USER';
+    EXECUTE 'DROP OWNED BY suri_readonly CASCADE';
+    EXECUTE 'DROP ROLE suri_readonly';
+  END IF;
+END
+$$;
 
 -- ROLE 생성 + 로그인 허용
 CREATE ROLE suri_readonly WITH LOGIN PASSWORD 'readonly_pass';
