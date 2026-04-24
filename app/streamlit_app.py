@@ -35,21 +35,21 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# 질문·답변 컨테이너 배경색 (기존 파랑/초록 배지와 겹치지 않게 아이보리/웜그레이 톤).
-# Streamlit 1.56 DOM: st.container(border=True) → stVerticalBlockBorderWrapper.
-# 마커를 깊게 감싸기 때문에 descendant selector로 매칭하고 !important로 기본 테두리 오버라이드.
+# 질문·답변 컨테이너 배경을 회색 톤으로 강조해 "이 블록이 질문/답변이다" 를
+# 시각적으로 분리. Streamlit 1.56 DOM: st.container(border=True) →
+# stVerticalBlockBorderWrapper. 마커가 내부에 있으므로 :has() 로 부모 매치.
 st.markdown(
     """
 <style>
 [data-testid="stVerticalBlockBorderWrapper"]:has(.suri-question-marker) {
-    background-color: #fbf7ed !important;
-    border: 1px solid #e6dcc4 !important;
+    background-color: #eef0f3 !important;
+    border: 1px solid #cfd3d9 !important;
     border-radius: 8px !important;
     padding: 8px 14px !important;
 }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.suri-answer-marker) {
-    background-color: #f4f2ed !important;
-    border: 1px solid #d9d4c8 !important;
+    background-color: #e3e7ec !important;
+    border: 1px solid #c0c6ce !important;
     border-left: 4px solid #6b7280 !important;
     border-radius: 8px !important;
     padding: 8px 14px !important;
