@@ -1,7 +1,7 @@
 # ADR-003: Agent Orchestration Framework 선택
 
-**상태**: Accepted  
-**작성일**: 2026-04-22 (D-7)  
+**상태**: Accepted · Amended 2026-04-24 (Agent별 모델 선택 결정 추가)
+**작성일**: 2026-04-22 (D-7)
 **컨텍스트**: SURI 3-Agent (Planner / Executor / Critic) 구현 시 프레임워크 선택
 
 ---
@@ -175,6 +175,109 @@ Option B에서 시작하면 LangChain 추상화 해제가 훨씬 어려움.
 
 ---
 
+## Amendment (2026-04-24, D-5): Agent별 모델 선택
+
+### 배경
+
+초기 결정 시점(D-7)에서 모든 Agent를 Sonnet 4.6으로 통일하되 "Haiku
+4.5 분리 예정"을 본 ADR에 명시했다. D-5 Railway 배포 완료 후 실제
+이관 타당성을 실측으로 검증.
+
+### 실측 테스트 (2026-04-24)
+
+대상: Planner + Critic을 Haiku 4.5로 이관, Executor는 Sonnet 유지
+(SQL 생성 품질 보호).
+
+**결과 요약** (상세: `docs/research/haiku-migration-test.md`):
+
+| 지표 | Sonnet 전체 | Haiku (Planner+Critic) |
+|---|---|---|
+| Core 8 PASS | 8/8 | **7/8** (C4 FAIL) |
+| Total latency | 497.5s | 388.8s (**-22%**) |
+| C1 GA 낙차 재현성 | 1.07~18.10%p 편차 | 7.89%p 완전 수렴 (3/3) |
+| Scene 3 T2·T3 맥락 | ✓ | ✓ |
+
+C4 실패 원인: Haiku Critic이 *"customers_safe 뷰를 통해 조회했습니다"*
+같은 **거버넌스 경로 투명성 서술을 생략**. 답변 내용 자체는 정확하나
+assertion 키워드(`customers_safe` · `PII 거버넌스` · `뷰를 통해`) 부재.
+
+### 고려한 해결책과 기각 사유
+
+**Option 1**: Critic 프롬프트에 *"고객 데이터 질의 시 'customers_safe
+뷰를 통해 조회' 전제 명시"* 1줄 추가
+- **기각**: `docs/interview-prep/design-decisions.md §9.1`의 overfitting
+  경계 원칙 3체크 전부 위반
+  - C4 assertion 키워드와 완전 일치 (특정 VIEW명 박음)
+  - 도메인 원칙이 아닌 테스트 통과용 문구
+  - 고객 무관 질의에도 튀어나올 부작용
+
+**Option 2**: 원칙 레벨 프롬프트 (*"분석 근거를 투명하게 명시"*)
+- 타당하나 Haiku의 **간결성 성향** 자체가 근본 원인 → 프롬프트로
+  강제해도 C4만 통과하고 다른 케이스의 거버넌스 서술 품질은 여전히
+  Sonnet 대비 떨어질 가능성
+
+**Option 3**: Planner만 Haiku, Critic은 Sonnet 유지
+- 기술적으로 안전하나 latency 절감 효과 축소
+
+### 결정: **현재 전 Agent Sonnet 4.6 유지, 이관 보류**
+
+#### 근거
+
+1. **Critic 품질 = 포트폴리오 차별화 축**
+   - GDPval-AA Elo: Sonnet 4.6 1633 vs Haiku 미공개 (추정 하위)
+   - 거버넌스 투명성·도메인 해석은 SURI 5개 차별화 축 중 2개(#1 Governance,
+     #5 Domain Grounding)의 핵심 출력 지점
+   - 316 Elo 차이 (Sonnet vs Gemini 3.1 Pro 기준)가 의미하는 품질 격차는
+     프롬프트 튜닝으로 메우기 어려움
+
+2. **latency -22%는 유혹적이나 대안 있음**
+   - 캐시 HIT 시 즉시 응답 → 면접관 첫 접속 시엔 캐시가 품질 유지 경로
+   - Anthropic prompt caching으로 반복 system prompt 캐시 가능 (향후)
+
+3. **이관 확정을 위한 프롬프트 수정이 overfitting 위험**
+   - §9.1 원칙을 ADR 저자 본인이 위반하는 자기모순 회피
+   - 포트폴리오 성격상 "작동하는 모든 트릭" 보다 "근거 있는 일관성"이 유리
+
+#### 트레이드오프 수용
+
+- **포기**: latency -22%, 월 API 비용 10~15% 절감
+- **수용 근거**: Anthropic 월 한도 설정으로 비용 상한 통제 중. 포트폴리오
+  단계 운영 부하는 무시 가능
+
+### 실측 데이터 자산화
+
+본 Amendment의 실측 결과는 **면접 시 "근거 기반 선택"의 증거**로
+활용한다:
+
+- Q: *"왜 Sonnet만 썼나요? Haiku가 더 싼데."*
+- A: *"실측했습니다. Core 8 7/8 PASS, latency -22%, C1 재현성 향상 등
+  우호 지표 다수 있었지만 C4에서 거버넌스 투명성 서술을 Haiku가 생략하는
+  패턴 발견. 프롬프트 1줄 추가로 해결 가능했으나 §9.1의 overfitting 경계
+  원칙에 위반되어 기각. 전 Agent Sonnet 유지로 결정. 측정 리포트는
+  `docs/research/haiku-migration-test.md`에 보관."*
+
+### 재검토 조건
+
+다음 중 하나 이상 발생 시 Haiku 이관을 재검토:
+
+1. Critic 프롬프트 설계 방식이 바뀌어 **Haiku에서도 거버넌스 경로
+   서술이 자연스럽게 나오는** 구조가 가능해짐
+2. Anthropic이 Haiku의 도메인 해석 품질을 크게 개선한 후속 모델 출시
+3. 운영 규모가 PoC를 크게 초과해 비용 최적화 압력이 실질적이 됨
+
+### 관련 코드 변경 (프로덕션 영향 없음)
+
+- `app/agents/base.py`: `PLANNER_MODEL` · `EXECUTOR_MODEL` · `CRITIC_MODEL`
+  환경변수 스위치 추가 (기본값 Sonnet 4.6)
+- `app/agents/planner.py`, `critic.py`: 해당 상수 참조
+- `.env`에 `SURI_{PLANNER,EXECUTOR,CRITIC}_MODEL` 기본 미설정 →
+  프로덕션 배포 동작 불변
+
+이 스위치는 **향후 재검토를 쉽게 하기 위해 유지**한다. 제거 시 테스트
+재현성을 잃음.
+
+---
+
 ## 면접 방어 답변
 
 ### Q: Agent 프레임워크 경험이 없는 것 아닌가요?
@@ -203,6 +306,20 @@ secret manager 연동, (3) OpenTelemetry 기반 tracing 추가. Option B로
 갔다면 여기에 'LangChain 사내 OSS 심사 + LangSmith 대체재 결정'이
 추가되었을 겁니다."
 
+### Q: Haiku 4.5가 훨씬 저렴한데 왜 Sonnet을 썼나요?
+
+"실측했습니다. Planner와 Critic을 Haiku로 이관하면 latency -22%,
+월 비용 10~15% 절감이 가능했는데 Core 8에서 C4 케이스가 FAIL했습니다.
+원인은 Haiku Critic이 'customers_safe 뷰를 통해 조회했습니다' 같은
+거버넌스 경로 투명성 서술을 생략하는 경향입니다. 답변 내용 자체는
+정확했지만 SURI의 차별화 축 중 하나가 '거버넌스 투명성 내재화'이기
+때문에 Critic 품질 타협은 어렵다고 판단했습니다. 프롬프트에 해당
+문구를 박는 방법은 제가 설계한 overfitting 경계 원칙(design-decisions
+§9.1)에 위반되어 기각했고, 결과적으로 전 Agent Sonnet 유지로 결정했습니다.
+측정 리포트는 `docs/research/haiku-migration-test.md`에 보관합니다.
+환경변수 기반 모델 스위치는 코드에 남겨두어 향후 재검토 비용을
+낮췄습니다."
+
 ---
 
 ## References
@@ -210,5 +327,8 @@ secret manager 연동, (3) OpenTelemetry 기반 tracing 추가. Option B로
 - 4-AI cross-validation research: `docs/research/agent-framework/01~04.md`
 - ADR-001: 합성 데이터 채택
 - ADR-002: MCP 라이브러리 선택 (`mcp.server.fastmcp.FastMCP`)
+- ADR-004: Domain Glossary (Deterministic over Vector)
+- Haiku 이관 실측: `docs/research/haiku-migration-test.md`
+- Overfitting 경계 원칙: `docs/interview-prep/design-decisions.md §9.1`
 - MCP Python SDK: https://github.com/modelcontextprotocol/python-sdk
 - Anthropic Messages API + Tool Use: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use
