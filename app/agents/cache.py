@@ -30,18 +30,32 @@ CACHE_DIR = Path(".cache/agent_responses")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _cache_key(question: str) -> str:
-    """Stable hash of question text."""
-    return hashlib.md5(question.strip().encode("utf-8")).hexdigest()[:16]
+def _cache_key(question: str, history: list[dict] | None = None) -> str:
+    """
+    Stable hash of (question, history questions).
+
+    Backward compatibility: if history is None or empty, the key is computed
+    from `question` alone — identical to the previous single-turn format.
+    Existing single-turn cache files remain valid after this change.
+    """
+    q = question.strip()
+    if not history:
+        return hashlib.md5(q.encode("utf-8")).hexdigest()[:16]
+    history_str = "|".join(turn.get("question", "").strip() for turn in history)
+    combined = f"{q}|{history_str}"
+    return hashlib.md5(combined.encode("utf-8")).hexdigest()[:16]
 
 
-def _cache_path(question: str) -> Path:
-    return CACHE_DIR / f"{_cache_key(question)}.json"
+def _cache_path(question: str, history: list[dict] | None = None) -> Path:
+    return CACHE_DIR / f"{_cache_key(question, history)}.json"
 
 
-def load_cached(question: str) -> PipelineResult | None:
+def load_cached(
+    question: str,
+    history: list[dict] | None = None,
+) -> PipelineResult | None:
     """Return cached PipelineResult if present, else None."""
-    path = _cache_path(question)
+    path = _cache_path(question, history)
     if not path.exists():
         return None
     try:
@@ -67,9 +81,12 @@ def load_cached(question: str) -> PipelineResult | None:
         return None
 
 
-def save_cached(result: PipelineResult) -> None:
+def save_cached(
+    result: PipelineResult,
+    history: list[dict] | None = None,
+) -> None:
     """Save PipelineResult to cache."""
-    path = _cache_path(result.question)
+    path = _cache_path(result.question, history)
     try:
         data: dict[str, Any] = {
             "question": result.question,

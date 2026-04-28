@@ -6,12 +6,26 @@ Streamlit 렌더링 헬퍼.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import streamlit as st
 
 from app.agents.executor import ToolCall
 from app.agents.orchestrator import PipelineResult
+
+
+# LLM 답변 중 숫자 범위 표기("25~28만", "2,000~4,000억") 의 단일 틸드를
+# Streamlit 프런트엔드 마크다운이 strikethrough 로 해석해 한 ~부터 다른 ~
+# 까지를 통째로 취소선으로 렌더하는 현상이 관찰됨. 이를 방지하려면
+# 1) ~~...~~ 페어는 내부 텍스트만 살리고 제거,
+# 2) 남은 단일 ~ 는 마크다운 이스케이프(\~) 처리하여 strikethrough 해석 차단.
+_STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~", flags=re.DOTALL)
+
+
+def _sanitize_tildes(text: str) -> str:
+    text = _STRIKETHROUGH_RE.sub(r"\1", text)
+    return text.replace("~", r"\~")
 
 
 # =============================================================
@@ -42,21 +56,42 @@ def render_governance_status(result: PipelineResult) -> None:
         if tc.is_error and tc.error_type == "GuardViolation":
             layer1_blocked = True
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if layer1_blocked:
-            st.error("🔴 Layer 1 — SQL Guard 차단 발생")
-        else:
-            st.success("🟢 Layer 1 — SQL Guard 통과")
-    with col2:
-        st.success("🟢 Layer 2 — suri_readonly ROLE")
-    with col3:
-        if not sql_executed:
-            st.info("🔵 Layer 3 — Schema 차단 (원본 테이블/PII 컬럼 부재)")
-        elif layer3_safe_view:
-            st.info("🔵 Layer 3 — customers_safe VIEW 사용")
-        else:
-            st.success("🟢 Layer 3 — 일반 테이블 접근")
+    # 3 layer 뱃지를 st.columns + st.success 로 분리 렌더하면 주변 여백이
+    # 불균형해지는 문제가 있어, 단일 HTML flex 블록으로 렌더. 외부 margin 을
+    # 질문/답변 박스와 동일하게 잡아 시각 균형 확보.
+    _STYLE_OK = "background:#e6f4ea; color:#137333; border:1px solid #b7dfbe;"
+    _STYLE_INFO = "background:#e8f0fe; color:#1967d2; border:1px solid #bcd0f7;"
+    _STYLE_ERR = "background:#fce8e6; color:#c5221f; border:1px solid #f4b7b1;"
+
+    def _badge(style: str, text: str) -> str:
+        return (
+            f'<div style="{style} padding:10px 14px; border-radius:6px; '
+            f'flex:1; font-size:0.92rem; line-height:1.35;">{text}</div>'
+        )
+
+    layer1_html = _badge(
+        _STYLE_ERR, "🔴 Layer 1 — SQL Guard 차단 발생",
+    ) if layer1_blocked else _badge(
+        _STYLE_OK, "🟢 Layer 1 — SQL Guard 통과",
+    )
+    layer2_html = _badge(_STYLE_OK, "🟢 Layer 2 — suri_readonly ROLE")
+    if not sql_executed:
+        layer3_html = _badge(
+            _STYLE_INFO, "🔵 Layer 3 — Schema 차단 (원본 테이블/PII 컬럼 부재)",
+        )
+    elif layer3_safe_view:
+        layer3_html = _badge(
+            _STYLE_INFO, "🔵 Layer 3 — customers_safe VIEW 사용",
+        )
+    else:
+        layer3_html = _badge(_STYLE_OK, "🟢 Layer 3 — 일반 테이블 접근")
+
+    st.markdown(
+        '<div style="display:flex; gap:12px; margin:6px 0;">'
+        + layer1_html + layer2_html + layer3_html
+        + '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # =============================================================
@@ -174,6 +209,104 @@ def render_plan(result: PipelineResult) -> None:
         st.markdown("**Caveats:**")
         for cv in plan.caveats:
             st.markdown(f"- {cv}")
+
+
+# =============================================================
+# Conversation (multi-turn) 턴 렌더링
+# =============================================================
+
+def render_conversation_turn(
+    turn_idx: int,
+    question: str,
+    result: PipelineResult,
+    elapsed: float | None = None,
+    cache_hit: bool = False,
+    stage_durations: dict[str, float] | None = None,
+) -> None:
+    """지난 턴 렌더 — 실행 중 UI와 동일하게 Planner/Executor/Critic 3단계로 그룹핑.
+
+    stage_durations가 주어지면 각 단계 expander 라벨에 duration을 표기.
+    주어지지 않아도(예: 이전 포맷 캐시) 안전하게 생략.
+    """
+    sd = stage_durations or {}
+
+    meta_bits = [f"Turn {turn_idx}"]
+    if elapsed is not None:
+        meta_bits.append(f"{elapsed:.1f}s")
+    meta_bits.append("Tool " + str(len(result.tool_calls)))
+    if cache_hit:
+        meta_bits.append("캐시 HIT")
+    st.caption(" · ".join(meta_bits))
+
+    # 질문 / 답변 컨테이너: inline style 로 직접 주입 (DOM 구조 변경에 영향 X).
+    # padding top·bottom 을 대칭으로 잡고, 라벨/본문 사이 간격을 답변과 동일하게.
+    _BOX_PADDING = "16px 20px 18px 20px"
+
+    safe_question = _sanitize_tildes(question)
+    st.markdown(
+        f'''<div style="background-color:#eef0f3; border:1px solid #cfd3d9; '''
+        f'''border-radius:8px; padding:{_BOX_PADDING}; margin:6px 0;">\n\n'''
+        f'''**🗣️ 질문**\n\n{safe_question}\n\n</div>''',
+        unsafe_allow_html=True,
+    )
+
+    render_governance_status(result)
+
+    # 답변 — 약간 더 진한 회색 + 좌측 strip 강조.
+    safe_answer = _sanitize_tildes(result.answer)
+    st.markdown(
+        f'''<div style="background-color:#e3e7ec; border:1px solid #c0c6ce; '''
+        f'''border-left:4px solid #6b7280; border-radius:8px; '''
+        f'''padding:{_BOX_PADDING}; margin:6px 0;">\n\n'''
+        f'''**💬 답변**\n\n{safe_answer}\n\n</div>''',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("**🤖 Agent 파이프라인**")
+
+    # 1️⃣ Planner
+    planner_label = "✅ 1️⃣ Planner"
+    if "planner" in sd:
+        planner_label += f" ({sd['planner']:.1f}s)"
+    with st.expander(planner_label, expanded=True):
+        render_plan(result)
+
+    # 2️⃣ Executor — tool 호출만 (최종 실행 결과는 아래 분리)
+    executor_label = "✅ 2️⃣ Executor"
+    if "executor" in sd:
+        executor_label += f" ({sd['executor']:.1f}s)"
+    tool_count = len(result.tool_calls)
+    err_count = sum(1 for tc in result.tool_calls if tc.is_error)
+    executor_label += f" · {tool_count} tool"
+    if err_count:
+        executor_label += f" · 에러 {err_count}"
+
+    with st.expander(executor_label, expanded=True):
+        render_tool_timeline(result.tool_calls)
+
+    # 3️⃣ Critic — 전용 데이터가 없어 메타정보만 노출
+    critic_label = "✅ 3️⃣ Critic"
+    if "critic" in sd:
+        critic_label += f" ({sd['critic']:.1f}s)"
+    critic_label += f" · 답변 {len(result.answer)}자"
+    with st.expander(critic_label, expanded=True):
+        st.caption(
+            "Critic은 도메인 벤치마크·proxy 선긋기·거버넌스 경로 보고를 "
+            "자연어 답변으로 합성하는 단계입니다. 출력은 위 **💬 답변** 섹션에 표시."
+        )
+
+    # 최종 실행 결과 — 파이프라인 3단계와 분리. Critic 답변의 원천 데이터.
+    sql_executed = any(
+        tc.name == "execute_readonly_sql" for tc in result.tool_calls
+    )
+    if sql_executed:
+        st.markdown("**📊 최종 실행 결과** — Critic이 해석한 원천 데이터")
+        with st.container(border=True):
+            render_execution_result(result.execution_result)
+    else:
+        st.caption(
+            "📊 최종 실행 결과 없음 — Schema 단계에서 종료 (SQL 미실행)"
+        )
 
 
 # =============================================================

@@ -56,6 +56,23 @@ Domain notes:
 - Customer PII is masked — plan with semantic intent, not raw PII fields.
 - APE = Annual Premium Equivalent (monthly × 12 + annual + lumpsum × 0.1).
 
+Multi-turn context (only when prior turns are provided in the conversation):
+- The user's current question may reference entities from earlier turns using
+  deictic/elliptical terms: "그 중", "그 상품", "그거", "앞서 본", "위에서 말한",
+  "같은 조건으로", "응", "그럼" + 이어지는 표현.
+- Resolve these references using the most recent matching entity (channel,
+  product, cohort, period, metric) from the prior turns.
+- The `intent` field MUST be self-contained after resolution — write it as if
+  the question stood alone. Carry the resolved entity into `filters` too when
+  it narrows the scope (e.g., "채널 = GA").
+- Example:
+    T1 question: "판매채널별 25회차 유지율 어때?"
+    T2 question: "응, GA 중에서도 어떤 상품이 제일 심해?"
+    → T2 intent: "GA 채널 내에서 25회차 유지율이 가장 낮은 상품 식별"
+    → T2 filters: ["channel = GA", "25회차 유지율 기준"]
+- If there are NO prior turns (single-turn call), ignore this section and
+  interpret the question as standalone.
+
 Do not:
 - Write SQL.
 - Assume or invent specific column names.

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 
-from .base import get_anthropic_client, MODEL_NAME, MAX_TOKENS_CRITIC, cached_system
+from .base import get_anthropic_client, CRITIC_MODEL, MAX_TOKENS_CRITIC, cached_system
 from .prompts import CRITIC_SYSTEM
 from .planner import Plan
 
@@ -59,7 +59,7 @@ Executor's result:
 Produce a concise Korean answer for the user."""
 
     response = client.messages.create(
-        model=MODEL_NAME,
+        model=CRITIC_MODEL,
         max_tokens=MAX_TOKENS_CRITIC,
         system=cached_system(CRITIC_SYSTEM),
         messages=[

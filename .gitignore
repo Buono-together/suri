@@ -24,3 +24,6 @@ logs/*.jsonl
 .cache/
 .env.bak
 .tmp/
+
+# Playwright MCP debug artifacts (screenshots, console logs, page dumps)
+.playwright-mcp/

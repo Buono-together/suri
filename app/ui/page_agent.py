@@ -220,9 +220,15 @@ def render_agent_page() -> None:
             "캐시", value=True, help="OFF 시 강제 재실행", disabled=is_running,
         )
 
-    # 첫 질문 전에만 시연 프리셋 그리드 노출. 쿼리 실행이 트리거된 순간(run_clicked)
-    # 부터는 바로 숨겨서 '로딩 중' 상태에서 프리셋이 잠깐 보이는 현상을 방지.
-    if conv_len == 0 and not is_running and not run_clicked:
+    # 첫 질문 전(완전한 idle)에만 시연 프리셋 노출. 실행 중·실행 예약·직전 에러가
+    # 하나라도 있으면 숨김.
+    if (
+        conv_len == 0
+        and not is_running
+        and not run_clicked
+        and st.session_state._pending_run is None
+        and st.session_state.get("_last_run_error") is None
+    ):
         st.markdown("")
         _render_main_presets()
 
@@ -433,8 +439,14 @@ def render_agent_page() -> None:
 
     last_error = st.session_state.get("_last_run_error")
 
-    if not st.session_state.conversation and last_error is None and not is_running:
-        st.info("👈 왼쪽 사이드바에서 프리셋을 선택하거나 위에 질문을 입력하고 실행하세요.")
+    if (
+        not st.session_state.conversation
+        and last_error is None
+        and not is_running
+        and not run_clicked
+        and st.session_state._pending_run is None
+    ):
+        st.info("위에 질문을 입력하거나 아래 시연 프리셋을 선택해 실행하세요.")
     else:
         # 최근 실행 에러는 누적되지 않고 최상단에 한 번 표시
         if last_error is not None:

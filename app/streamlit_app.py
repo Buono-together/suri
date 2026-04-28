@@ -35,30 +35,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# 질문·답변 컨테이너 배경을 회색 톤으로 강조해 "이 블록이 질문/답변이다" 를
-# 시각적으로 분리. Streamlit 1.56 DOM: st.container(border=True) →
-# stVerticalBlockBorderWrapper. 마커가 내부에 있으므로 :has() 로 부모 매치.
-st.markdown(
-    """
-<style>
-[data-testid="stVerticalBlockBorderWrapper"]:has(.suri-question-marker) {
-    background-color: #eef0f3 !important;
-    border: 1px solid #cfd3d9 !important;
-    border-radius: 8px !important;
-    padding: 8px 14px !important;
-}
-[data-testid="stVerticalBlockBorderWrapper"]:has(.suri-answer-marker) {
-    background-color: #e3e7ec !important;
-    border: 1px solid #c0c6ce !important;
-    border-left: 4px solid #6b7280 !important;
-    border-radius: 8px !important;
-    padding: 8px 14px !important;
-}
-.suri-question-marker, .suri-answer-marker { display: none; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
+# 질문/답변 컨테이너 스타일은 rendering.py 에서 마크다운 내부에 직접
+# inline style 로 주입. Streamlit 버전별 DOM 변경에 영향받지 않음.
 
 
 # =============================================================

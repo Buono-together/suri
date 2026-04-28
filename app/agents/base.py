@@ -29,11 +29,24 @@ load_dotenv(".env")
 
 
 # =============================================================
-# 상수
+# 상수 / 모델 선택
 # =============================================================
+#
+# ADR-003 원칙: Executor 는 SQL 생성의 핵심이므로 반드시 Sonnet 유지.
+# Planner / Critic 은 비용 효율을 위해 Haiku 이관 가능성이 있으므로
+# 각 에이전트별로 환경변수로 교체 가능하게 둔다.
+#
+# 환경변수 미설정 시 기본값은 Sonnet 4.6 (backward compatible).
 
-# Anthropic 모델 (ADR-003)
-MODEL_NAME = "claude-sonnet-4-6"
+_DEFAULT_MODEL = "claude-sonnet-4-6"
+
+# 공통 레거시 상수 — 외부 모듈 import 호환용 (Executor 가 참조).
+MODEL_NAME = os.environ.get("SURI_MODEL", _DEFAULT_MODEL)
+
+# Agent 별 모델 — 이관 실측 테스트 또는 비용 최적화 시 env 로 교체.
+PLANNER_MODEL = os.environ.get("SURI_PLANNER_MODEL", _DEFAULT_MODEL)
+EXECUTOR_MODEL = os.environ.get("SURI_EXECUTOR_MODEL", _DEFAULT_MODEL)
+CRITIC_MODEL = os.environ.get("SURI_CRITIC_MODEL", _DEFAULT_MODEL)
 
 # 공통 LLM 설정
 MAX_TOKENS_PLANNER = 1500   # v3 복잡 질문 대응 (800은 부족)

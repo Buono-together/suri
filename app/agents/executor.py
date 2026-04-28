@@ -13,7 +13,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .base import (
     get_anthropic_client,
@@ -70,7 +70,10 @@ class ExecutorError(RuntimeError):
         self.tool_calls = tool_calls or []
 
 
-async def execute(plan: Plan) -> tuple[dict, list[ToolCall]]:
+async def execute(
+    plan: Plan,
+    on_event: Callable[[dict], None] | None = None,
+) -> tuple[dict, list[ToolCall]]:
     """
     Execute the plan by generating SQL and calling MCP tool.
 
@@ -81,9 +84,23 @@ async def execute(plan: Plan) -> tuple[dict, list[ToolCall]]:
 
     Raises ExecutorError only on fundamental failures (LLM errors, etc.).
     The exception carries .tool_calls so partial trace is preserved.
+
+    on_event: optional progress callback. Invoked synchronously from this
+    coroutine's thread with dict payloads of shape
+      {"stage": "executor", "type": "tool_start"|"tool_done"|"retry", "data": {...}}.
+    Exceptions inside the callback are swallowed with a warning so a broken UI
+    listener never corrupts the pipeline.
     """
     client = get_anthropic_client()
     tool_calls_trace: list[ToolCall] = []
+
+    def _emit(type_: str, **data: Any) -> None:
+        if on_event is None:
+            return
+        try:
+            on_event({"stage": "executor", "type": type_, "data": data})
+        except Exception as cb_err:  # noqa: BLE001
+            logger.warning("on_event callback raised: %s", cb_err)
 
     # MCP 서버에서 tool 스키마 조회 (매번 하는 이유: PoC 단순성)
     tools = await list_mcp_tools()
@@ -163,6 +180,13 @@ async def execute(plan: Plan) -> tuple[dict, list[ToolCall]]:
             logger.info("Calling MCP tool '%s' with input: %s",
                         tool_name, json.dumps(tool_input, ensure_ascii=False)[:200])
 
+            _emit(
+                "tool_start",
+                name=tool_name,
+                input=dict(tool_input) if tool_input else {},
+                call_index=len(tool_calls_trace) + 1,
+            )
+
             t0 = time.monotonic()
             raw_result = await call_mcp_tool(tool_name, tool_input)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -180,6 +204,12 @@ async def execute(plan: Plan) -> tuple[dict, list[ToolCall]]:
                 logger.warning("Tool error: %s (%s)", parsed.get("error"), parsed.get("type"))
                 if parsed.get("type") == "GuardViolation":
                     guard_retries += 1
+                    _emit(
+                        "retry",
+                        attempt=guard_retries,
+                        reason="GuardViolation",
+                        error=str(parsed.get("error", ""))[:200],
+                    )
 
             # UI trace 수집
             tool_calls_trace.append(ToolCall(
@@ -190,6 +220,15 @@ async def execute(plan: Plan) -> tuple[dict, list[ToolCall]]:
                 error_type=error_type,
                 elapsed_ms=elapsed_ms,
             ))
+
+            _emit(
+                "tool_done",
+                name=tool_name,
+                duration_ms=elapsed_ms,
+                is_error=is_error,
+                error_type=error_type,
+                call_index=len(tool_calls_trace),
+            )
 
             tool_results.append({
                 "type": "tool_result",

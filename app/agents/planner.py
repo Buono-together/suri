@@ -10,7 +10,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-from .base import get_anthropic_client, MODEL_NAME, MAX_TOKENS_PLANNER, cached_system
+from .base import get_anthropic_client, PLANNER_MODEL, MAX_TOKENS_PLANNER, cached_system
 from .prompts import PLANNER_SYSTEM
 
 
@@ -50,9 +50,38 @@ class PlannerError(RuntimeError):
 # Main function
 # =============================================================
 
-def plan(question: str) -> Plan:
+# 이전 턴 답변 문맥은 요약된 형태로만 전달한다. Planner가 필요한 건
+# 엔티티(채널·상품 등)와 대체적 결론뿐이고, 전문을 넣으면 prompt가
+# 늘어나 드물게 token 초과를 유발한다.
+_HISTORY_ANSWER_CHAR_BUDGET = 600
+
+
+def _build_messages(question: str, history: list[dict] | None) -> list[dict]:
+    messages: list[dict] = []
+    if history:
+        for turn in history:
+            q = turn.get("question", "").strip()
+            a = turn.get("answer", "").strip()
+            if len(a) > _HISTORY_ANSWER_CHAR_BUDGET:
+                a = a[:_HISTORY_ANSWER_CHAR_BUDGET] + " …(이하 생략)"
+            if q:
+                messages.append({"role": "user", "content": q})
+            if a:
+                messages.append({"role": "assistant", "content": a})
+    messages.append({"role": "user", "content": question})
+    return messages
+
+
+def plan(question: str, history: list[dict] | None = None) -> Plan:
     """
     Produce an analysis plan from a Korean natural-language question.
+
+    Args:
+        question: Current user question.
+        history: Optional prior turns as [{"question": str, "answer": str}, ...]
+                 in chronological order. When present, the Planner resolves
+                 deictic references (e.g., "그 상품") using prior context.
+                 history=None or [] → identical behavior to single-turn plan().
 
     Raises PlannerError if:
     - LLM response is not valid JSON
@@ -60,15 +89,19 @@ def plan(question: str) -> Plan:
     """
     client = get_anthropic_client()
 
-    logger.info("plan() called with question: %s", question[:200])
+    if history:
+        logger.info(
+            "plan() called with question: %s (history turns=%d)",
+            question[:200], len(history),
+        )
+    else:
+        logger.info("plan() called with question: %s", question[:200])
 
     response = client.messages.create(
-        model=MODEL_NAME,
+        model=PLANNER_MODEL,
         max_tokens=MAX_TOKENS_PLANNER,
         system=cached_system(PLANNER_SYSTEM),
-        messages=[
-            {"role": "user", "content": question},
-        ],
+        messages=_build_messages(question, history),
     )
 
     # Claude 응답은 content blocks의 리스트. 첫 번째 text block 사용.
@@ -96,13 +129,12 @@ def plan(question: str) -> Plan:
         logger.warning("JSON parse failed (likely truncated). Retrying with explicit 'shorter plan' instruction. Raw tail: ...%s", raw_text[-200:])
         
         # 재시도: 더 짧게 응답하도록 명시
+        retry_question = question + "\n\n(Keep each field concise - aim for a shorter plan. Maximum 3 items per list.)"
         retry_response = client.messages.create(
-            model=MODEL_NAME,
+            model=PLANNER_MODEL,
             max_tokens=MAX_TOKENS_PLANNER,
             system=cached_system(PLANNER_SYSTEM),
-            messages=[
-                {"role": "user", "content": question + "\n\n(Keep each field concise - aim for a shorter plan. Maximum 3 items per list.)"},
-            ],
+            messages=_build_messages(retry_question, history),
         )
         
         if not retry_response.content:
