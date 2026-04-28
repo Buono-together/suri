@@ -1,9 +1,9 @@
 """
 Data Sample 뷰 — 각 테이블/뷰 상위 10행.
 
-- customers 원본은 Layer 2 방어로 조회 불가 (스킵).
-- customers_safe / premium_payments / premium_payments_v / monthly_ape / policies /
-  products / agents / claims 샘플 노출.
+- 첫 진입 탭은 customers_safe (실제 샘플 표시).
+- 원본 customers 는 식별/연락성 컬럼을 포함하므로 suri_readonly ROLE 기준
+  직접 조회 대상에서 제외 — 데모에서는 customers_safe 사용.
 - 모든 쿼리는 suri_readonly 경유 + st.cache_data TTL 1h.
 """
 from __future__ import annotations
@@ -27,17 +27,9 @@ class SampleTarget:
     blocked_reason: str = ""
 
 
+# 탭 순서: 첫 진입 시 customers_safe(샘플 가능) 가 기본 활성화되도록 맨 앞,
+# 직접 조회 제한 대상인 customers 는 맨 뒤에 (restricted) 라벨로.
 TARGETS: list[SampleTarget] = [
-    SampleTarget(
-        name="customers",
-        kind="TABLE",
-        blocked=True,
-        blocked_reason=(
-            "원본 테이블은 PII(주민번호·전화·이메일 등)를 포함하여 "
-            "suri_readonly ROLE에서 조회가 차단됩니다. "
-            "PII 제거 버전은 `customers_safe` 탭을 확인하세요."
-        ),
-    ),
     SampleTarget(name="customers_safe", kind="VIEW"),
     SampleTarget(name="products", kind="TABLE"),
     SampleTarget(name="agents", kind="TABLE"),
@@ -46,6 +38,16 @@ TARGETS: list[SampleTarget] = [
     SampleTarget(name="premium_payments_v", kind="VIEW"),
     SampleTarget(name="claims", kind="TABLE"),
     SampleTarget(name="monthly_ape", kind="VIEW"),
+    SampleTarget(
+        name="customers",
+        kind="TABLE",
+        blocked=True,
+        blocked_reason=(
+            "원본 customers 테이블은 식별/연락성 컬럼을 포함하므로 "
+            "suri_readonly ROLE 기준 직접 조회 대상에서 제외했습니다. "
+            "데모에서는 customers_safe VIEW 를 통해 제한된 컬럼만 확인할 수 있습니다."
+        ),
+    ),
 ]
 
 
@@ -61,10 +63,21 @@ def _fetch_sample(table_name: str, limit: int = SAMPLE_LIMIT) -> dict[str, Any]:
 
 def _render_target(target: SampleTarget) -> None:
     kind_badge = "🗂️ VIEW" if target.kind == "VIEW" else "📋 TABLE"
-    st.markdown(f"#### `{target.name}` · {kind_badge}")
+    label_suffix = " · 조회 제한" if target.blocked else ""
+    st.markdown(f"#### `{target.name}` · {kind_badge}{label_suffix}")
 
     if target.blocked:
-        st.error(f"🚫 **접근 차단** — {target.blocked_reason}")
+        # error(빨강) → warning(amber) 로 톤 다운. "차단" 보다 "제한된 객체"
+        # 라는 사실을 차분히 알리고, customers_safe 로 유도.
+        # raw customers 의 샘플 row 는 표시하지 않는다 — PoC 의 조회 통제 설계.
+        st.warning(
+            "**🔒 조회 제한**\n\n"
+            "원본 `customers` 테이블은 식별/연락성 컬럼을 포함하므로 "
+            "**suri_readonly ROLE 기준 직접 조회 대상에서 제외**했습니다. "
+            "데모에서는 **`customers_safe` VIEW** 를 통해 분석에 필요한 "
+            "제한된 컬럼만 확인할 수 있습니다 — raw row 는 표시하지 않습니다."
+        )
+        st.caption("→ **customers_safe** 탭에서 샘플 데이터를 확인하세요.")
         return
 
     result = _fetch_sample(target.name)
@@ -87,11 +100,16 @@ def _render_target(target: SampleTarget) -> None:
 def render_data_sample_tab() -> None:
     st.markdown("### 📊 Data Sample")
     st.caption(
-        f"각 오브젝트의 상위 {SAMPLE_LIMIT}행 · suri_readonly 경유 · "
-        "결과 1시간 캐싱. `customers` 원본은 Layer 2 방어로 차단."
+        f"각 오브젝트의 상위 {SAMPLE_LIMIT}행을 확인합니다. "
+        "기본 조회는 suri_readonly ROLE 기준이며, "
+        "원본 `customers` 대신 `customers_safe` VIEW 를 제공합니다."
     )
 
-    labels = [t.name for t in TARGETS]
+    # 탭 라벨: customers 만 (restricted) 표기. 첫 진입 시 customers_safe 자동 활성화.
+    labels = [
+        f"{t.name} (restricted)" if t.blocked else t.name
+        for t in TARGETS
+    ]
     sub_tabs = st.tabs(labels)
     for tab, target in zip(sub_tabs, TARGETS):
         with tab:

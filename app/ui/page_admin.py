@@ -37,6 +37,22 @@ def render_admin_page() -> None:
             "LLM·DB 왕복 없이 즉시 반환 → 시연·회귀 테스트 가속."
         )
 
+    st.markdown("---")
+    st.markdown("**캐시 사용 토글**")
+    st.toggle(
+        "Agent 실행 시 캐시 사용",
+        key="_admin_use_cache",
+        value=st.session_state.get("_admin_use_cache", False),
+        help="ON → 동일 질문은 캐시에서 즉시 반환. OFF → 매번 실제 LLM·DB 실행.",
+    )
+    st.caption(
+        "이 토글은 **/agent** 페이지의 실행에 적용됩니다. "
+        "기본값은 OFF — 일반 방문자/면접관에게는 캐시 토글 자체가 노출되지 않으며 "
+        "항상 실제 실행 흐름이 표시됩니다."
+    )
+
+    st.markdown("---")
+    st.markdown("**캐시 삭제**")
     confirm = st.checkbox(
         "삭제 확인 (면접관 실수 방지용 이중 확인)",
         key="admin_cache_delete_confirm",

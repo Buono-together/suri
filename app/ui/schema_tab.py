@@ -1,8 +1,11 @@
 """
-Schema 뷰 — 9개 DB 오브젝트 (8 table + 1 view, 그리고 2 추가 VIEW) read-only 메타.
+Schema 뷰 — 9개 DB 오브젝트의 read-only 메타.
 
-customers 원본은 suri_readonly로 접근 차단 (Layer 2 방어).
-UI는 정적 메타만 노출하며 실제 DB 조회는 information_schema를 통해.
+원본 customers 는 식별/연락성 컬럼(주민번호·전화·이메일 등)을 포함하므로
+suri_readonly ROLE 기준 직접 조회 대상에서 제외. 데모에서는 customers_safe
+VIEW 를 통해 제한된 컬럼만 확인.
+
+UI 정적 메타 + information_schema 동적 컬럼/행수 조합.
 """
 from __future__ import annotations
 
@@ -27,22 +30,15 @@ class DBObject:
     safe_view: bool = False
 
 
+# 탭 순서: 첫 진입 시 customers_safe(샘플 가능) 가 기본 활성화되도록 맨 앞,
+# 직접 조회 제한 대상인 customers 는 맨 뒤에 (restricted) 라벨로.
 OBJECTS: list[DBObject] = [
-    DBObject(
-        name="customers",
-        kind="TABLE",
-        description=(
-            "원본 고객 테이블. 주민번호·전화·이메일 등 PII 포함. "
-            "suri_readonly 계정은 GRANT에서 제외되어 직접 접근 불가."
-        ),
-        pii_blocked=True,
-    ),
     DBObject(
         name="customers_safe",
         kind="VIEW",
         description=(
-            "고객 정보 중 PII 컬럼을 제거한 안전 VIEW. "
-            "Agent/UI에서는 반드시 이 VIEW만 사용."
+            "고객 정보 중 식별/연락성 컬럼을 제외한 VIEW. "
+            "Agent/UI 는 이 VIEW 를 사용합니다."
         ),
         safe_view=True,
     ),
@@ -89,6 +85,16 @@ OBJECTS: list[DBObject] = [
             "연납화보험료(APE) 월단위 집계 VIEW. "
             "월납×12 + 연납 + 일시납×0.1 환산."
         ),
+    ),
+    DBObject(
+        name="customers",
+        kind="TABLE",
+        description=(
+            "원본 고객 테이블. 식별/연락성 컬럼(주민번호·전화·이메일 등) 포함. "
+            "suri_readonly ROLE 기준 직접 조회 대상에서 제외 — "
+            "데모에서는 customers_safe VIEW 사용."
+        ),
+        pii_blocked=True,
     ),
 ]
 
@@ -152,18 +158,19 @@ def _render_kind_badge(kind: str) -> str:
 
 def _render_status_badge(obj: DBObject) -> str:
     if obj.pii_blocked:
+        # restricted 표시 — 강한 빨강 대신 amber 톤으로 (경고이되 차단 강조 X)
         return (
             '<span style="display:inline-block; padding:2px 10px; '
-            'border-radius:12px; background:#fce8e6; color:#c5221f; '
+            'border-radius:12px; background:#fff4e5; color:#9a3412; '
             'font-size:0.75rem; font-weight:600; margin-left:6px;">'
-            '🚫 PII — suri_readonly 접근 차단</span>'
+            '🔒 조회 제한 · suri_readonly ROLE</span>'
         )
     if obj.safe_view:
         return (
             '<span style="display:inline-block; padding:2px 10px; '
-            'border-radius:12px; background:#fef7e0; color:#b06000; '
+            'border-radius:12px; background:#e6f4ea; color:#137333; '
             'font-size:0.75rem; font-weight:600; margin-left:6px;">'
-            '🛡️ Safe VIEW (원본 PII 제거)</span>'
+            '🟢 Safe VIEW · 식별 컬럼 제외</span>'
         )
     return ""
 
@@ -179,11 +186,14 @@ def _render_object(obj: DBObject) -> None:
     st.caption(obj.description)
 
     if obj.pii_blocked:
-        st.info(
-            "이 테이블은 Layer 2 방어(ROLE-level GRANT)에 의해 "
-            "suri_readonly 계정에서 조회 불가. 컬럼·행수 조회 생략. "
-            "PII 제외 데이터는 `customers_safe` VIEW 사용."
+        st.warning(
+            "**조회 제한**\n\n"
+            "원본 `customers` 테이블은 식별/연락성 컬럼을 포함하므로 "
+            "**suri_readonly ROLE 기준 직접 조회 대상에서 제외**했습니다. "
+            "데모에서는 **`customers_safe` VIEW** 를 통해 분석에 필요한 "
+            "제한된 컬럼만 확인할 수 있습니다 (raw row 는 표시하지 않습니다)."
         )
+        st.caption("→ **customers_safe** 탭에서 컬럼 구조와 샘플을 확인하세요.")
         return
 
     # 행 수
@@ -221,12 +231,18 @@ def _render_object(obj: DBObject) -> None:
 def render_schema_tab() -> None:
     st.markdown("### 🗄️ Database Schema")
     st.caption(
-        "PostgreSQL 15 · 9 오브젝트 (6 TABLE + 3 VIEW) · "
-        "모든 조회는 suri_readonly ROLE 경유 (Layer 2 방어)."
+        "PostgreSQL 15 · 9 objects · suri_readonly ROLE 기준으로 "
+        "조회 가능한 테이블과 View 를 표시합니다. "
+        "원본 `customers` 는 식별/연락성 컬럼을 포함하므로 "
+        "`customers_safe` VIEW 를 통해 제한된 컬럼만 확인합니다."
     )
 
-    # 서브-탭으로 테이블/뷰 분리
-    object_labels = [f"{obj.name}" for obj in OBJECTS]
+    # 탭 라벨: customers 만 (restricted) 표기. DB 객체 이름은 변경하지 않고
+    # UI 라벨에서만 분기 — 첫 진입 시 customers_safe 가 자동 활성화된다.
+    object_labels = [
+        f"{obj.name} (restricted)" if obj.pii_blocked else obj.name
+        for obj in OBJECTS
+    ]
     sub_tabs = st.tabs(object_labels)
     for tab, obj in zip(sub_tabs, OBJECTS):
         with tab:

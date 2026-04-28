@@ -78,7 +78,7 @@ pg = st.navigation(
 
 with st.sidebar:
     st.markdown("## 🎯 SURI")
-    st.caption("Data Agent PoC · 한화생명 지원용")
+    st.caption("자연어→SQL 분석 질의 PoC")
     st.markdown("---")
 
     # 사용자 페이지

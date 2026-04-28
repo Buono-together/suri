@@ -61,7 +61,7 @@ def _reset_conversation() -> None:
 
 
 def _set_question_from_preset(preset: Preset) -> None:
-    """프리셋 클릭 핸들러.
+    """프리셋 클릭 핸들러 — 입력창에 질문만 채움 (전체 프리셋 카드용).
 
     단일턴 프리셋(C1–C8, A1–A3)은 새 대화로 리셋.
     Scene 3 프리셋(T1/T2/T3): T1은 새 대화로 시작, T2·T3는 기존 대화에 이어붙임.
@@ -72,6 +72,33 @@ def _set_question_from_preset(preset: Preset) -> None:
         _reset_conversation()
     if preset.key in _SCENE3_PRESET_KEYS:
         st.session_state._scene3_active = True
+
+
+def _set_question_and_run_from_preset(preset: Preset) -> None:
+    """추천 카드 전용 — 입력 + 즉시 실행 예약.
+
+    on_click 콜백 안에서 _pending_run / _running 만 세팅하면, Streamlit이
+    콜백 종료 직후 자동으로 rerun 하면서 기존 'pending-run 패턴' 분기에
+    진입한다. 별도 st.rerun() 호출 불필요.
+
+    use_cache 는 admin 페이지에서 컨트롤하는 _admin_use_cache 세션 키를
+    참조하며, 미설정 시 기본값 False (일반 방문자는 캐시 미사용).
+    """
+    _set_question_from_preset(preset)
+
+    # 단일턴 프리셋은 위에서 _reset_conversation 됐으므로 history None.
+    # T2/T3 (continue 키) 는 추천에 포함되지 않지만, 안전을 위해 분기 유지.
+    if preset.key in _CONTINUE_PRESET_KEYS:
+        history = _history_for_planner()
+    else:
+        history = None
+
+    st.session_state._pending_run = {
+        "question": preset.question,
+        "use_cache": st.session_state.get("_admin_use_cache", False),
+        "history": history,
+    }
+    st.session_state._running = True
 
 
 def _history_for_planner() -> list[dict] | None:
@@ -89,7 +116,10 @@ def _history_for_planner() -> list[dict] | None:
 # =============================================================
 
 def _preset_button(preset: Preset, key_suffix: str = "") -> None:
-    """공통 프리셋 버튼 렌더. key_suffix 로 위치별 고유 키 부여."""
+    """공통 프리셋 버튼 렌더 — continuation chip(T2·T3) 전용.
+
+    key_suffix 로 위치별 고유 키 부여.
+    """
     help_text = preset.note or ""
     if preset.scene:
         help_text = f"**{preset.scene}** · {help_text}"
@@ -103,39 +133,151 @@ def _preset_button(preset: Preset, key_suffix: str = "") -> None:
     )
 
 
+# 카드 우상단 배지 — 색은 의미군별로만 구분 (정보 우선, 장식 최소).
+_BADGE_STYLES: dict[str, str] = {
+    "추천":     "background:#fef3c7; color:#92400e; border:1px solid #fcd34d;",
+    "도메인":   "background:#e0e7ff; color:#3730a3; border:1px solid #c7d2fe;",
+    "조회통제": "background:#fee2e2; color:#991b1b; border:1px solid #fca5a5;",
+    "멀티턴":   "background:#cffafe; color:#155e75; border:1px solid #67e8f9;",
+    "기준설정": "background:#ffedd5; color:#9a3412; border:1px solid #fdba74;",
+}
+_BADGE_FALLBACK = "background:#f3f4f6; color:#4b5563; border:1px solid #d1d5db;"
+
+
+def _badges_html(badges: tuple[str, ...]) -> str:
+    if not badges:
+        return ""
+    parts = []
+    for b in badges:
+        style = _BADGE_STYLES.get(b, _BADGE_FALLBACK)
+        parts.append(
+            f'<span style="{style} padding:2px 8px; border-radius:10px; '
+            f'font-size:0.7rem; margin-left:4px; vertical-align:middle; '
+            f'white-space:nowrap;">{b}</span>'
+        )
+    return "".join(parts)
+
+
+def _render_preset_card(
+    preset: Preset,
+    key_suffix: str = "",
+    auto_run: bool = False,
+) -> None:
+    """카드 컨테이너: 코드 · 제목 + 배지 + 질문 본문 + 입력/실행 버튼.
+
+    auto_run=True  → 추천 카드. 클릭 시 입력 + 즉시 실행. 라벨 "▶ 바로 실행".
+    auto_run=False → 일반 카드. 클릭 시 입력만. 라벨 "↗ 질문 입력".
+    """
+    title_text = preset.title or preset.label.split(" · ", 1)[-1]
+    header_html = (
+        f'<div style="font-weight:600; font-size:0.95rem; line-height:1.4; '
+        f'margin-bottom:8px;">'
+        f'{preset.key} · {title_text}{_badges_html(preset.badges)}'
+        f'</div>'
+    )
+    body_html = (
+        f'<div style="color:#374151; font-size:0.85rem; line-height:1.5; '
+        f'min-height:60px; margin-bottom:10px; word-break:keep-all;">'
+        f'{preset.question}</div>'
+    )
+    if auto_run:
+        btn_label = "▶ 바로 실행"
+        on_click = _set_question_and_run_from_preset
+        btn_type = "primary"
+    else:
+        btn_label = "↗ 질문 입력"
+        on_click = _set_question_from_preset
+        btn_type = "secondary"
+
+    with st.container(border=True):
+        st.markdown(header_html + body_html, unsafe_allow_html=True)
+        st.button(
+            btn_label,
+            key=f"card_{preset.key}{key_suffix}",
+            on_click=on_click,
+            args=(preset,),
+            use_container_width=True,
+            type=btn_type,
+            help=preset.note or "",
+        )
+
+
+# 추천 카드 — 첫 진입 면접관에게 보여주는 핵심 3개.
+# 각각 다른 축(도메인 분석 / 조회 통제 / 멀티턴 드릴다운) 을 대표한다.
+_RECOMMENDED_KEYS = ("C1", "C4", "S3-T1")
+
+
 def _render_main_presets() -> None:
-    """첫 질문 전에 메인 영역에 표시되는 프리셋 카드 그리드.
+    """첫 질문 전 idle 상태 메인 영역.
+
+    구조:
+      1) 추천 시나리오 3개 (C1·C4·S3-T1)
+      2) 대표 분석 질문 (Core 8) — 4×2 카드 그리드
+      3) 멀티턴 드릴다운 (Scene 3) + 기준 설정이 필요한 질문 (Advanced Q&A)
 
     Scene 3 T2/T3 는 T1 실행 후에만 의미가 있으므로 여기서는 T1 만 노출.
     """
-    st.markdown("### 🎯 시연 프리셋")
+    # ----- 1) 추천 시나리오 (원클릭 실행)
+    st.markdown("### 처음이라면 — 추천 시나리오 3개")
+    st.caption(
+        "추천 시나리오는 전체 프리셋 중 면접 시연에 적합한 대표 흐름입니다. "
+        "**▶ 바로 실행** 클릭 시 즉시 실행되며, "
+        "Planner → Executor/Tool 호출 → SQL → Critic 흐름을 확인할 수 있습니다."
+    )
+    rec_presets = [_find_by_key(k) for k in _RECOMMENDED_KEYS]
+    rec_cols = st.columns(3)
+    for p, col in zip(rec_presets, rec_cols):
+        if p is None:
+            continue
+        with col:
+            _render_preset_card(p, key_suffix="_rec", auto_run=True)
 
-    with st.container(border=True):
-        st.markdown("**Core 8** · 회귀 + 시연 시나리오")
-        # 4 cols × 2 rows
-        for row_start in (0, 4):
-            cols = st.columns(4)
-            for i, col in enumerate(cols):
-                idx = row_start + i
-                if idx < len(CORE_8):
-                    with col:
-                        _preset_button(CORE_8[idx])
+    st.markdown("")
+    st.markdown("---")
+    st.markdown("### 전체 시연 프리셋")
+    st.caption(
+        "전체 프리셋은 카드의 **↗ 질문 입력** 으로 위 입력창에 질문을 채운 뒤, "
+        "**▶ 실행** 버튼으로 실행해주세요. (추천 3개와 일부 중복됩니다.)"
+    )
+
+    # ----- 2) Core 8 (질문 입력만)
+    st.markdown("**대표 분석 질문 (Core 8)** · 회귀 + 시연 시나리오 (도메인 · 조회 통제 · 한계 인정)")
+    for row_start in (0, 4):
+        cols = st.columns(4)
+        for i, col in enumerate(cols):
+            idx = row_start + i
+            if idx < len(CORE_8):
+                with col:
+                    _render_preset_card(CORE_8[idx])
 
     st.markdown("")
 
-    scene_col, adv_col = st.columns([1, 2])
+    # ----- 3) Scene 3 멀티턴 (단독 row, 좌측 1/3)
+    st.markdown("**멀티턴 드릴다운 (Scene 3)**")
+    scene_col, _ = st.columns([1, 2])
     with scene_col:
-        with st.container(border=True):
-            st.markdown("**Scene 3 멀티턴** · 최대 3턴 드릴다운")
-            _preset_button(SCENE_3_MULTITURN[0])  # T1
-            st.caption("T2·T3 는 T1 실행 후 상단에 표시됩니다.")
-    with adv_col:
-        with st.container(border=True):
-            st.markdown("**Advanced Q&A** · 모호성·기준 설정")
-            acols = st.columns(len(ADVANCED_3))
-            for p, col in zip(ADVANCED_3, acols):
-                with col:
-                    _preset_button(p)
+        _render_preset_card(SCENE_3_MULTITURN[0])
+        st.caption("T2·T3 는 T1 실행 후 화면 상단에 표시됩니다.")
+
+    st.markdown("")
+
+    # ----- 4) Advanced Q&A — expander 로 접어 첫 화면 밀도 완화
+    with st.expander(
+        "**기준 설정이 필요한 질문 (Advanced Q&A)** · 모호성·기준 설정·proxy 한계 인정",
+        expanded=False,
+    ):
+        adv_cols = st.columns(3)
+        for p, col in zip(ADVANCED_3, adv_cols):
+            with col:
+                _render_preset_card(p)
+
+
+def _find_by_key(key: str):
+    """추천 카드용 헬퍼 — presets.find_by_key 와 동일 의미지만 모듈 의존 최소화."""
+    for p in CORE_8 + SCENE_3_MULTITURN + ADVANCED_3:
+        if p.key == key:
+            return p
+    return None
 
 
 def _render_continuation_hints() -> None:
@@ -165,10 +307,13 @@ def render_agent_page() -> None:
     """Agent 대화 페이지 전체. st.navigation 에서 호출됨."""
     _init_state()
 
-    st.title("SURI — 보험 상품 Data Agent")
+    st.title("SURI — 보험 상품 분석 질의 PoC")
+    st.markdown(
+        "자연어 질의 → SQL 생성·실행·해석 흐름을 확인하는 합성 데이터 기반 데모"
+    )
     st.caption(
-        "3-Agent pipeline (Planner → Executor → Critic) · "
-        "MCP stdio · PostgreSQL 15 · 3층 PII 방어"
+        "Planner / Executor / Critic 역할 분리 · MCP Tool 호출 · "
+        "Read-only Query Controls · PostgreSQL 15"
     )
 
     conv_len = len(st.session_state.conversation)
@@ -198,14 +343,15 @@ def render_agent_page() -> None:
         ):
             _render_continuation_hints()
 
-    # 질문 입력 + 실행 + 캐시 토글
-    col_q, col_btn, col_cache = st.columns([6, 1, 1])
+    # 질문 입력 + 실행. 캐시 토글은 /admin 페이지로 이동 — 일반 방문자에게는
+    # 캐시 토글이 보이지 않으며, 기본값(False)으로 항상 실제 실행 흐름을 보여준다.
+    col_q, col_btn = st.columns([7, 1])
     with col_q:
         question = st.text_input(
             "질문을 입력하거나 아래 프리셋 선택:",
             key="question_input",
             label_visibility="collapsed",
-            placeholder="예: 판매채널별 13회차 유지율 어때?",
+            placeholder="예: 판매채널별 13회차·25회차 유지율 낙차가 어느 채널에서 가장 큰지 비교해줘",
             disabled=turn_cap_reached or is_running,
         )
     with col_btn:
@@ -215,13 +361,14 @@ def render_agent_page() -> None:
             use_container_width=True,
             disabled=turn_cap_reached or is_running,
         )
-    with col_cache:
-        use_cache = st.toggle(
-            "캐시", value=True, help="OFF 시 강제 재실행", disabled=is_running,
-        )
 
-    # 첫 질문 전(완전한 idle)에만 시연 프리셋 노출. 실행 중·실행 예약·직전 에러가
-    # 하나라도 있으면 숨김.
+    # 일반 방문자: 캐시 OFF 강제. Admin 토글 ON 시에만 캐시 사용.
+    use_cache = bool(st.session_state.get("_admin_use_cache", False))
+
+    # 첫 질문 전(완전한 idle)에만 안내 문구 + 시연 프리셋 노출.
+    # 실행 중·실행 예약·직전 에러가 하나라도 있으면 숨김.
+    # 안내 문구는 입력창 바로 아래 → 추천 카드 위에 두어, 사용자가 추천을
+    # 보기 전에 실행 흐름을 먼저 이해할 수 있게 한다.
     if (
         conv_len == 0
         and not is_running
@@ -229,6 +376,11 @@ def render_agent_page() -> None:
         and st.session_state._pending_run is None
         and st.session_state.get("_last_run_error") is None
     ):
+        st.info(
+            "질문을 직접 입력해 실행하거나, 아래 **추천 시나리오의 ▶ 바로 실행** 을 "
+            "눌러 즉시 시연할 수 있습니다.  \n"
+            "실행 결과에서 Planner → Executor/Tool 호출 → SQL → Critic 흐름을 확인할 수 있습니다."
+        )
         st.markdown("")
         _render_main_presets()
 
@@ -439,15 +591,9 @@ def render_agent_page() -> None:
 
     last_error = st.session_state.get("_last_run_error")
 
-    if (
-        not st.session_state.conversation
-        and last_error is None
-        and not is_running
-        and not run_clicked
-        and st.session_state._pending_run is None
-    ):
-        st.info("위에 질문을 입력하거나 아래 시연 프리셋을 선택해 실행하세요.")
-    else:
+    # idle 안내 문구는 위(입력창 바로 아래)로 이동. 여기서는 결과/에러가 있을
+    # 때만 렌더한다 — idle 상태에서는 위의 안내 + 추천 카드가 이미 표시됨.
+    if last_error is not None or st.session_state.conversation:
         # 최근 실행 에러는 누적되지 않고 최상단에 한 번 표시
         if last_error is not None:
             st.markdown("---")
